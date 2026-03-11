@@ -12,22 +12,18 @@ const client = twilio(
 
 app.post("/voice", async (req, res) => {
 
-  const caller = req.body.From;
+const twiml = `
+<Response>
+<Say voice="alice">Hello. This is the AI receptionist.</Say>
+</Response>
+`;
 
-  await client.messages.create({
-    body: "Sorry we missed your call. How can we help?",
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to: caller
-  });
+res.type("text/xml");
+res.send(twiml);
 
-  const twiml = new twilio.twiml.VoiceResponse();
-
-  twiml.say("Sorry we missed your call. We've sent you a text message.");
-
-  res.type("text/xml");
-  res.send(twiml.toString());
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+console.log("Server running");
 });
