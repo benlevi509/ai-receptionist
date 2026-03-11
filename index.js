@@ -10,7 +10,7 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-app.post("/voice", async (req, res) => {
+app.all("/voice", async (req, res) => {
 
 const twiml = `
 <Response>
