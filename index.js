@@ -1,56 +1,33 @@
 import express from "express";
-import OpenAI from "openai";
+import bodyParser from "body-parser";
+import twilio from "twilio";
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+app.use(bodyParser.urlencoded({ extended: false }));
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 
-app.post("/voice", (req, res) => {
-  res.type("text/xml");
-  res.send(`
-    <Response>
-      <Say>Hello! This is the AI receptionist. How can I help?</Say>
-      <Gather input="speech" action="/respond" method="POST" />
-    </Response>
-  `);
-});
+app.post("/voice", async (req, res) => {
 
-app.post("/respond", async (req, res) => {
-  const userSaid = req.body.SpeechResult || "";
+  const caller = req.body.From;
 
-  if (!userSaid.trim()) {
-    res.type("text/xml");
-    return res.send(`
-      <Response>
-        <Say>Sorry, I didn't catch that. Please say it again.</Say>
-        <Gather input="speech" action="/respond" method="POST" />
-      </Response>
-    `);
-  }
-
-  const ai = await openai.responses.create({
-    model: "gpt-4o-mini",
-    input: [
-      {
-        role: "system",
-        content:
-          "You are a polite professional AI receptionist. Keep replies short and ask one follow-up question."
-      },
-      { role: "user", content: userSaid }
-    ]
+  await client.messages.create({
+    body: "Sorry we missed your call. How can we help?",
+    from: process.env.TWILIO_PHONE_NUMBER,
+    to: caller
   });
 
-  const reply = ai.output_text || "Sorry, can you repeat that?";
+  const twiml = new twilio.twiml.VoiceResponse();
+
+  twiml.say("Sorry we missed your call. We've sent you a text message.");
 
   res.type("text/xml");
-  res.send(`
-    <Response>
-      <Say>${reply}</Say>
-      <Gather input="speech" action="/respond" method="POST" />
-    </Response>
-  `);
+  res.send(twiml.toString());
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on", PORT));
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
+});
