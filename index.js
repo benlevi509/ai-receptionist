@@ -47,21 +47,23 @@ app.get("/test-ai", async (req, res) => {
 
 /* ---------- Voice Route ---------- */
 
-app.all("/voice", async (req, res) => {
+app.post("/voice", (req, res) => {
 
-  const twiml = `
+const twiml = `
 <Response>
-<Say voice="alice">
-Hello, thank you for calling. This is the AI receptionist. How can I help you today?
-</Say>
+<Say>Hello, thank you for calling. How can I help you today?</Say>
+
+<Gather input="speech" action="/process-speech" method="POST">
+<Say>Please tell me how I can help.</Say>
+</Gather>
+
 </Response>
 `;
 
-  res.type("text/xml");
-  res.send(twiml);
+res.type("text/xml");
+res.send(twiml);
 
 });
-
 /* ---------- Server ---------- */
 
 const PORT = process.env.PORT || 3000;
