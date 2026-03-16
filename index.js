@@ -3,6 +3,10 @@ import bodyParser from "body-parser";
 import twilio from "twilio";
 import OpenAI from "openai";
 
+import { restaurant } from "./restaurant.js";
+import { createCallMemory, getCallMemory } from "./memory.js";
+import { createSlot, isSlotFull, addBooking } from "./booking.js";
+
 const app = express();
 
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -17,7 +21,11 @@ const openai = new OpenAI({
 /* ---------- AI System Prompt ---------- */
 
 const SYSTEM_PROMPT = `
-You are a professional restaurant receptionist.
+You are the professional phone receptionist for ${restaurant.name}.
+
+Restaurant details:
+Address: ${restaurant.address}
+Cuisine: ${restaurant.cuisine}
 
 Your job is to help customers with:
 - table bookings
@@ -30,7 +38,7 @@ Rules:
 - Keep answers short (1–2 sentences)
 - Ask follow-up questions if information is missing
 
-If a customer wants a booking, ask for:
+If a customer wants to make a booking, ask for:
 - number of people
 - date
 - time
@@ -74,6 +82,10 @@ app.post("/voice", (req, res) => {
 
   const callSid = req.body.CallSid;
 
+  /* create memory for this call */
+
+  createCallMemory(callSid);
+
   callMemories[callSid] = [
     { role: "system", content: SYSTEM_PROMPT }
   ];
@@ -82,7 +94,7 @@ app.post("/voice", (req, res) => {
 <Response>
 
 <Say voice="Polly.Joanna">
-Hello, thank you for calling. How can I help you today?
+Hello, thank you for calling ${restaurant.name}. How can I help you today?
 </Say>
 
 <Gather input="speech" action="/process-speech" method="POST">
@@ -110,11 +122,15 @@ app.post("/process-speech", async (req, res) => {
 
   if (!callMemories[callSid]) {
 
+    createCallMemory(callSid);
+
     callMemories[callSid] = [
       { role: "system", content: SYSTEM_PROMPT }
     ];
 
   }
+
+  const memory = getCallMemory(callSid);
 
   callMemories[callSid].push({
     role: "user",
@@ -180,6 +196,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
-
-
-   
