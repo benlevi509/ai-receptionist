@@ -39,11 +39,9 @@ If a customer wants a booking, ask for:
 Always sound friendly and professional.
 `;
 
-/* ---------- Conversation Memory ---------- */
+/* ---------- Call Memory Storage ---------- */
 
-let conversationHistory = [
-  { role: "system", content: SYSTEM_PROMPT }
-];
+const callMemories = {};
 
 /* ---------- Test Route ---------- */
 
@@ -53,7 +51,10 @@ app.get("/test-ai", async (req, res) => {
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: conversationHistory
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: "Hello" }
+      ]
     });
 
     res.send(response.choices[0].message.content);
@@ -71,24 +72,32 @@ app.get("/test-ai", async (req, res) => {
 
 app.post("/voice", (req, res) => {
 
-conversationHistory = [
-  { role: "system", content: SYSTEM_PROMPT }
-];
+  const callSid = req.body.CallSid;
 
-const twiml = `
+  callMemories[callSid] = [
+    { role: "system", content: SYSTEM_PROMPT }
+  ];
+
+  const twiml = `
 <Response>
 
-<Say>Hello, thank you for calling. How can I help you today?</Say>
+<Say voice="Polly.Joanna">
+Hello, thank you for calling. How can I help you today?
+</Say>
 
 <Gather input="speech" action="/process-speech" method="POST">
-<Say>Please tell me how I can help.</Say>
+
+<Say voice="Polly.Joanna">
+Please tell me how I can help.
+</Say>
+
 </Gather>
 
 </Response>
 `;
 
-res.type("text/xml");
-res.send(twiml);
+  res.type("text/xml");
+  res.send(twiml);
 
 });
 
@@ -96,56 +105,71 @@ res.send(twiml);
 
 app.post("/process-speech", async (req, res) => {
 
-const speech = req.body.SpeechResult;
+  const speech = req.body.SpeechResult;
+  const callSid = req.body.CallSid;
 
-conversationHistory.push({
-role: "user",
-content: speech
-});
+  if (!callMemories[callSid]) {
 
-try {
+    callMemories[callSid] = [
+      { role: "system", content: SYSTEM_PROMPT }
+    ];
 
-const aiResponse = await openai.chat.completions.create({
-model: "gpt-4o-mini",
-messages: conversationHistory
-});
+  }
 
-const reply = aiResponse.choices[0].message.content;
+  callMemories[callSid].push({
+    role: "user",
+    content: speech
+  });
 
-conversationHistory.push({
-role: "assistant",
-content: reply
-});
+  try {
 
-const twiml = `
+    const aiResponse = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: callMemories[callSid]
+    });
+
+    const reply = aiResponse.choices[0].message.content;
+
+    callMemories[callSid].push({
+      role: "assistant",
+      content: reply
+    });
+
+    const twiml = `
 <Response>
 
-<Say>${reply}</Say>
+<Say voice="Polly.Joanna">
+${reply}
+</Say>
 
 <Gather input="speech" action="/process-speech" method="POST">
-<Say>Is there anything else I can help you with?</Say>
+
+<Say voice="Polly.Joanna">
+Is there anything else I can help you with?
+</Say>
+
 </Gather>
 
 </Response>
 `;
 
-res.type("text/xml");
-res.send(twiml);
+    res.type("text/xml");
+    res.send(twiml);
 
-} catch (error) {
+  } catch (error) {
 
-console.error(error);
+    console.error(error);
 
-const twiml = `
+    const twiml = `
 <Response>
 <Say>Sorry, something went wrong. Please try again.</Say>
 </Response>
 `;
 
-res.type("text/xml");
-res.send(twiml);
+    res.type("text/xml");
+    res.send(twiml);
 
-}
+  }
 
 });
 
@@ -154,5 +178,8 @@ res.send(twiml);
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-console.log("Server running on port " + PORT);
+  console.log("Server running on port " + PORT);
 });
+
+
+   
