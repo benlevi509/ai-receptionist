@@ -117,7 +117,7 @@ method="POST">
 
 <Gather input="speech"
 timeout="6"
-speechTimeout="auto"
+speechTimeout="2"
 action="/process-speech"
 method="POST">
 </Gather>
