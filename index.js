@@ -1,6 +1,5 @@
 import express from "express";
 import bodyParser from "body-parser";
-import twilio from "twilio";
 import OpenAI from "openai";
 
 const app = express();
@@ -12,39 +11,39 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* ---------- CURRENT DATE FOR AI ---------- */
+/* ---------- CURRENT DATE ---------- */
 
 const today = new Date().toDateString();
 
 /* ---------- SYSTEM PROMPT ---------- */
 
 const SYSTEM_PROMPT = `
-You are the receptionist for Benji's Restaurant.
+You are a restaurant receptionist answering the phone.
 
 Today's date is ${today}.
 
-Speak like a real human receptionist answering the phone.
-
 Rules:
-- Maximum 15 words per response
-- Ask ONE question at a time
-- Never repeat questions already answered
-- Be polite and natural
-- If a caller says tomorrow or today, interpret the correct date
-- Guide the customer through a booking step by step
+- Maximum 10 words per response
+- Ask ONE question only
+- Never say "how are you"
+- Never introduce yourself
+- Never speak in paragraphs
+- Never repeat questions
+- Never give long explanations
+- Speak like a real busy receptionist
 
-Booking information needed:
+Booking information required:
 1. number of guests
 2. date
 3. time
 4. name
 
-Example tone:
-"For how many people?"
-"What time would you like the table?"
-"May I take your name please?"
+Example replies:
+"For how many guests?"
+"What time would you like?"
+"What name is the booking under?"
 
-Never speak in long paragraphs.
+Never speak more than one sentence.
 `;
 
 let conversationHistory = [
@@ -57,6 +56,7 @@ app.get("/test-ai", async (req, res) => {
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.2,
     messages: conversationHistory
   });
 
@@ -74,10 +74,11 @@ app.post("/voice", (req, res) => {
 
   const twiml = `
 <Response>
-<Say>Hello, thank you for calling Benji's Restaurant. How may I help you today?</Say>
 
-<Gather input="speech" timeout="5" action="/process-speech" method="POST">
-<Say>Please tell me how I can help.</Say>
+<Say>Benji's Restaurant. How can I help?</Say>
+
+<Gather input="speech" timeout="2" action="/process-speech" method="POST">
+<Say>Please tell me your booking request.</Say>
 </Gather>
 
 </Response>
@@ -93,7 +94,6 @@ app.post("/voice", (req, res) => {
 app.post("/process-speech", async (req, res) => {
 
   const speech = req.body.SpeechResult || "";
-
   const lowerSpeech = speech.toLowerCase();
 
 /* ---------- SILENCE DETECTION ---------- */
@@ -102,9 +102,9 @@ app.post("/process-speech", async (req, res) => {
 
     const twiml = `
 <Response>
-<Say>Sorry, I didn't catch that. Could you repeat please?</Say>
+<Say>Sorry, please repeat.</Say>
 
-<Gather input="speech" timeout="5" action="/process-speech" method="POST"/>
+<Gather input="speech" timeout="2" action="/process-speech" method="POST"/>
 
 </Response>
 `;
@@ -117,13 +117,13 @@ app.post("/process-speech", async (req, res) => {
 
 /* ---------- GOODBYE DETECTION ---------- */
 
-  const goodbyeWords = ["bye", "goodbye", "see you", "thanks bye"];
+  const goodbyeWords = ["bye", "goodbye", "thanks bye"];
 
   if (goodbyeWords.some(word => lowerSpeech.includes(word))) {
 
     const twiml = `
 <Response>
-<Say>Goodbye. We look forward to seeing you at Benji's Restaurant.</Say>
+<Say>Goodbye.</Say>
 <Hangup/>
 </Response>
 `;
@@ -145,6 +145,7 @@ app.post("/process-speech", async (req, res) => {
 
   const aiResponse = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.2,
     messages: conversationHistory
   });
 
@@ -162,8 +163,8 @@ app.post("/process-speech", async (req, res) => {
 
 <Say>${reply}</Say>
 
-<Gather input="speech" timeout="5" action="/process-speech" method="POST">
-<Say>Anything else I can help with?</Say>
+<Gather input="speech" timeout="2" action="/process-speech" method="POST">
+<Say>Anything else?</Say>
 </Gather>
 
 </Response>
