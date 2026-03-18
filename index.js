@@ -1,5 +1,7 @@
+
 import express from "express";
 import bodyParser from "body-parser";
+import twilio from "twilio";
 import OpenAI from "openai";
 
 const app = express();
@@ -11,29 +13,32 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* ---------- AI PROMPT ---------- */
+/* ---------- CURRENT DATE FOR AI ---------- */
+
+const today = new Date().toDateString();
+
+/* ---------- AI SYSTEM PROMPT ---------- */
 
 const SYSTEM_PROMPT = `
-You are the receptionist for Benji's Restaurant.
+You are a professional restaurant receptionist for Benji's Restaurant.
 
-Speak like a calm, friendly human receptionist.
+Today's date is ${today}.
 
 Rules:
-- Keep responses short.
-- Ask only ONE question at a time.
-- Never ask for multiple booking details at once.
+- Speak naturally like a human receptionist.
+- Keep responses under 20 words.
+- Ask ONE question at a time.
+- Never ask for information the customer already gave.
+- If the customer says "tomorrow" or "today", understand the correct date.
+- If the caller says goodbye, end the conversation politely.
 
-Booking flow:
-1. number of people
-2. date
-3. time
-4. name
+If taking a booking, collect:
+1) number of people
+2) date
+3) time
+4) name
 
-Example:
-Customer: I'd like to book a table.
-You: Of course. How many people will be dining?
-
-Be natural and relaxed. Never sound robotic.
+Always sound friendly and helpful.
 `;
 
 let conversationHistory = [
@@ -43,138 +48,102 @@ let conversationHistory = [
 /* ---------- TEST ROUTE ---------- */
 
 app.get("/test-ai", async (req, res) => {
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: conversationHistory
-    });
 
-    res.send(response.choices[0].message.content);
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: conversationHistory
+  });
 
-  } catch (error) {
-    console.error(error);
-    res.status(500).send("AI test failed");
-  }
+  res.send(response.choices[0].message.content);
 });
 
-/* ---------- INCOMING CALL ---------- */
+/* ---------- VOICE ROUTE ---------- */
 
 app.post("/voice", (req, res) => {
 
-conversationHistory = [
-  { role: "system", content: SYSTEM_PROMPT }
-];
+  conversationHistory = [
+    { role: "system", content: SYSTEM_PROMPT }
+  ];
 
-const twiml = `
+  const twiml = `
 <Response>
-
-<Say>Hello, thank you for calling Benji's Restaurant.</Say>
-
-<Gather
-input="speech"
-action="https://ai-receptionist-iopm.onrender.com/process-speech"
-method="POST"
-timeout="10"
-speechTimeout="auto">
-
-<Say>How can I help today?</Say>
-
+<Say>Hello, thank you for calling Benji's Restaurant. How can I help today?</Say>
+<Gather input="speech" action="/process-speech" method="POST">
+<Say>Please tell me how I can help.</Say>
 </Gather>
-
-<Say>Hello, are you still there?</Say>
-
-<Gather
-input="speech"
-action="https://ai-receptionist-iopm.onrender.com/process-speech"
-method="POST"
-timeout="10"
-speechTimeout="auto"/>
-
-<Say>Okay, feel free to call us again if you need anything. Goodbye.</Say>
-
 </Response>
 `;
 
-res.type("text/xml");
-res.send(twiml);
-
+  res.type("text/xml");
+  res.send(twiml);
 });
 
 /* ---------- PROCESS SPEECH ---------- */
 
 app.post("/process-speech", async (req, res) => {
 
-const speech = req.body.SpeechResult;
+  const speech = req.body.SpeechResult || "";
 
-conversationHistory.push({
-role: "user",
-content: speech
-});
+  const lowerSpeech = speech.toLowerCase();
 
-try {
+/* ---------- GOODBYE DETECTION ---------- */
 
-const aiResponse = await openai.chat.completions.create({
-model: "gpt-4o-mini",
-messages: conversationHistory
-});
+  const goodbyeWords = ["bye", "goodbye", "thanks bye", "see you"];
 
-const reply = aiResponse.choices[0].message.content;
+  if (goodbyeWords.some(word => lowerSpeech.includes(word))) {
 
-conversationHistory.push({
-role: "assistant",
-content: reply
-});
-
-const twiml = `
+    const twiml = `
 <Response>
+<Say>Goodbye. We look forward to seeing you at Benji's Restaurant.</Say>
+<Hangup/>
+</Response>
+`;
 
+    res.type("text/xml");
+    res.send(twiml);
+    return;
+  }
+
+/* ---------- ADD USER MESSAGE ---------- */
+
+  conversationHistory.push({
+    role: "user",
+    content: speech
+  });
+
+/* ---------- ASK OPENAI ---------- */
+
+  const aiResponse = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: conversationHistory
+  });
+
+  const reply = aiResponse.choices[0].message.content;
+
+  conversationHistory.push({
+    role: "assistant",
+    content: reply
+  });
+
+/* ---------- RESPOND WITH VOICE ---------- */
+
+  const twiml = `
+<Response>
 <Say>${reply}</Say>
-
-<Gather
-input="speech"
-action="https://ai-receptionist-iopm.onrender.com/process-speech"
-method="POST"
-timeout="10"
-speechTimeout="auto"/>
-
-<Say>Hello, are you still there?</Say>
-
-<Gather
-input="speech"
-action="https://ai-receptionist-iopm.onrender.com/process-speech"
-method="POST"
-timeout="10"
-speechTimeout="auto"/>
-
-<Say>Thanks for calling Benji's Restaurant. Goodbye.</Say>
-
+<Gather input="speech" action="/process-speech" method="POST">
+<Say>Is there anything else I can help with?</Say>
+</Gather>
 </Response>
 `;
 
-res.type("text/xml");
-res.send(twiml);
-
-} catch (error) {
-
-console.error(error);
-
-const twiml = `
-<Response>
-<Say>Sorry, something went wrong. Please try again.</Say>
-</Response>
-`;
-
-res.type("text/xml");
-res.send(twiml);
-
-}
-
+  res.type("text/xml");
+  res.send(twiml);
 });
 
 /* ---------- SERVER ---------- */
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-console.log("Server running on port " + PORT);
+  console.log("Server running on port " + PORT);
 });
