@@ -1,57 +1,64 @@
 import express from "express";
 import bodyParser from "body-parser";
-import twilio from "twilio";
 import OpenAI from "openai";
-
-import { restaurant } from "./restaurant.js";
-import { createCallMemory, getCallMemory } from "./memory.js";
-import { createSlot, isSlotFull, addBooking } from "./booking.js";
 
 const app = express();
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-/* ---------- OpenAI ---------- */
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* ---------- AI System Prompt ---------- */
+/* ---------- AI PROMPT ---------- */
 
 const SYSTEM_PROMPT = `
-You are the professional phone receptionist for ${restaurant.name}.
+You are the receptionist for Benji's Restaurant.
 
-Restaurant details:
-Address: ${restaurant.address}
-Cuisine: ${restaurant.cuisine}
-
-Your job is to help customers with:
-- table bookings
-- opening hours
-- takeaway orders
-- general questions about the restaurant
+Speak like a calm, friendly human receptionist.
 
 Rules:
-- Speak clearly and politely
-- Keep answers short (1–2 sentences)
-- Ask follow-up questions if information is missing
 
-If a customer wants to make a booking, ask for:
-- number of people
-- date
-- time
-- name
+- Keep answers short.
+- Ask only ONE question at a time.
+- Never ask for multiple booking details at once.
 
-Always sound friendly and professional.
+If someone wants a booking, collect information step by step:
+
+1. number of people
+2. date
+3. time
+4. name
+
+Example conversation:
+
+Customer: I'd like to book a table.
+
+You: Of course. How many people will be dining?
+
+Customer answers.
+
+You: Great. What date were you thinking of?
+
+Customer answers.
+
+You: And roughly what time?
+
+Customer answers.
+
+You: Perfect. Could I take the name for the booking?
+
+Be natural and polite.
 `;
 
-/* ---------- Call Memory Storage ---------- */
+/* ---------- MEMORY ---------- */
 
-const callMemories = {};
+let conversationHistory = [
+  { role: "system", content: SYSTEM_PROMPT }
+];
 
-/* ---------- Test Route ---------- */
+/* ---------- TEST ROUTE ---------- */
 
 app.get("/test-ai", async (req, res) => {
 
@@ -59,10 +66,7 @@ app.get("/test-ai", async (req, res) => {
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: "Hello" }
-      ]
+      messages: conversationHistory
     });
 
     res.send(response.choices[0].message.content);
@@ -76,123 +80,123 @@ app.get("/test-ai", async (req, res) => {
 
 });
 
-/* ---------- Voice Route ---------- */
+/* ---------- INCOMING CALL ---------- */
 
 app.post("/voice", (req, res) => {
 
-  const callSid = req.body.CallSid;
+conversationHistory = [
+  { role: "system", content: SYSTEM_PROMPT }
+];
 
-  /* create memory for this call */
-
-  createCallMemory(callSid);
-
-  callMemories[callSid] = [
-    { role: "system", content: SYSTEM_PROMPT }
-  ];
-
-  const twiml = `
+const twiml = `
 <Response>
 
-<Say voice="Polly.Joanna">
-Hello, thank you for calling ${restaurant.name}. How can I help you today?
-</Say>
+<Say>Hello, thank you for calling Benji's Restaurant.</Say>
 
-<Gather input="speech" action="/process-speech" method="POST">
+<Gather
+input="speech"
+action="https://ai-receptionist-iopm.onrender.com/process-speech"
+method="POST"
+timeout="10"
+speechTimeout="auto">
 
-<Say voice="Polly.Joanna">
-Please tell me how I can help.
-</Say>
+<Say>How can I help today?</Say>
 
 </Gather>
+
+<Say>Sorry, I didn't hear anything. Are you still there?</Say>
+
+<Gather
+input="speech"
+action="https://ai-receptionist-iopm.onrender.com/process-speech"
+method="POST"
+timeout="10"
+speechTimeout="auto">
+
+<Say>Please let me know how I can help.</Say>
+
+</Gather>
+
+<Say>Okay, feel free to call us again if you need anything. Goodbye.</Say>
 
 </Response>
 `;
 
-  res.type("text/xml");
-  res.send(twiml);
+res.type("text/xml");
+res.send(twiml);
 
 });
 
-/* ---------- Process Speech ---------- */
+/* ---------- PROCESS SPEECH ---------- */
 
 app.post("/process-speech", async (req, res) => {
 
-  const speech = req.body.SpeechResult;
-  const callSid = req.body.CallSid;
+const speech = req.body.SpeechResult;
 
-  if (!callMemories[callSid]) {
+conversationHistory.push({
+role: "user",
+content: speech
+});
 
-    createCallMemory(callSid);
+try {
 
-    callMemories[callSid] = [
-      { role: "system", content: SYSTEM_PROMPT }
-    ];
+const aiResponse = await openai.chat.completions.create({
+model: "gpt-4o-mini",
+messages: conversationHistory
+});
 
-  }
+const reply = aiResponse.choices[0].message.content;
 
-  const memory = getCallMemory(callSid);
+conversationHistory.push({
+role: "assistant",
+content: reply
+});
 
-  callMemories[callSid].push({
-    role: "user",
-    content: speech
-  });
-
-  try {
-
-    const aiResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: callMemories[callSid]
-    });
-
-    const reply = aiResponse.choices[0].message.content;
-
-    callMemories[callSid].push({
-      role: "assistant",
-      content: reply
-    });
-
-    const twiml = `
+const twiml = `
 <Response>
 
-<Say voice="Polly.Joanna">
-${reply}
-</Say>
+<Say>${reply}</Say>
 
-<Gather input="speech" action="/process-speech" method="POST">
+<Gather
+input="speech"
+action="https://ai-receptionist-iopm.onrender.com/process-speech"
+method="POST"
+timeout="10"
+speechTimeout="auto">
 
-<Say voice="Polly.Joanna">
-Is there anything else I can help you with?
-</Say>
+<Say>Go ahead.</Say>
 
 </Gather>
+
+<Say>Thanks for calling Benji's Restaurant. Goodbye.</Say>
 
 </Response>
 `;
 
-    res.type("text/xml");
-    res.send(twiml);
+res.type("text/xml");
+res.send(twiml);
 
-  } catch (error) {
+} catch (error) {
 
-    console.error(error);
+console.error(error);
 
-    const twiml = `
+const twiml = `
 <Response>
 <Say>Sorry, something went wrong. Please try again.</Say>
 </Response>
 `;
 
-    res.type("text/xml");
-    res.send(twiml);
+res.type("text/xml");
+res.send(twiml);
 
-  }
+}
 
 });
 
-/* ---------- Server ---------- */
+/* ---------- SERVER ---------- */
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+console.log("Server running on port " + PORT);
 });
