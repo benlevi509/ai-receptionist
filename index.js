@@ -1,4 +1,3 @@
-
 import express from "express";
 import bodyParser from "body-parser";
 import twilio from "twilio";
@@ -17,35 +16,42 @@ const openai = new OpenAI({
 
 const today = new Date().toDateString();
 
-/* ---------- AI SYSTEM PROMPT ---------- */
+/* ---------- SYSTEM PROMPT ---------- */
 
 const SYSTEM_PROMPT = `
-You are a professional restaurant receptionist for Benji's Restaurant.
+You are the receptionist for Benji's Restaurant.
 
 Today's date is ${today}.
 
+Speak like a real human receptionist answering the phone.
+
 Rules:
-- Speak naturally like a human receptionist.
-- Keep responses under 20 words.
-- Ask ONE question at a time.
-- Never ask for information the customer already gave.
-- If the customer says "tomorrow" or "today", understand the correct date.
-- If the caller says goodbye, end the conversation politely.
+- Maximum 15 words per response
+- Ask ONE question at a time
+- Never repeat questions already answered
+- Be polite and natural
+- If a caller says tomorrow or today, interpret the correct date
+- Guide the customer through a booking step by step
 
-If taking a booking, collect:
-1) number of people
-2) date
-3) time
-4) name
+Booking information needed:
+1. number of guests
+2. date
+3. time
+4. name
 
-Always sound friendly and helpful.
+Example tone:
+"For how many people?"
+"What time would you like the table?"
+"May I take your name please?"
+
+Never speak in long paragraphs.
 `;
 
 let conversationHistory = [
   { role: "system", content: SYSTEM_PROMPT }
 ];
 
-/* ---------- TEST ROUTE ---------- */
+/* ---------- TEST AI ---------- */
 
 app.get("/test-ai", async (req, res) => {
 
@@ -55,6 +61,7 @@ app.get("/test-ai", async (req, res) => {
   });
 
   res.send(response.choices[0].message.content);
+
 });
 
 /* ---------- VOICE ROUTE ---------- */
@@ -67,15 +74,18 @@ app.post("/voice", (req, res) => {
 
   const twiml = `
 <Response>
-<Say>Hello, thank you for calling Benji's Restaurant. How can I help today?</Say>
-<Gather input="speech" action="/process-speech" method="POST">
+<Say>Hello, thank you for calling Benji's Restaurant. How may I help you today?</Say>
+
+<Gather input="speech" timeout="5" action="/process-speech" method="POST">
 <Say>Please tell me how I can help.</Say>
 </Gather>
+
 </Response>
 `;
 
   res.type("text/xml");
   res.send(twiml);
+
 });
 
 /* ---------- PROCESS SPEECH ---------- */
@@ -86,9 +96,28 @@ app.post("/process-speech", async (req, res) => {
 
   const lowerSpeech = speech.toLowerCase();
 
+/* ---------- SILENCE DETECTION ---------- */
+
+  if (!speech) {
+
+    const twiml = `
+<Response>
+<Say>Sorry, I didn't catch that. Could you repeat please?</Say>
+
+<Gather input="speech" timeout="5" action="/process-speech" method="POST"/>
+
+</Response>
+`;
+
+    res.type("text/xml");
+    res.send(twiml);
+    return;
+
+  }
+
 /* ---------- GOODBYE DETECTION ---------- */
 
-  const goodbyeWords = ["bye", "goodbye", "thanks bye", "see you"];
+  const goodbyeWords = ["bye", "goodbye", "see you", "thanks bye"];
 
   if (goodbyeWords.some(word => lowerSpeech.includes(word))) {
 
@@ -102,6 +131,7 @@ app.post("/process-speech", async (req, res) => {
     res.type("text/xml");
     res.send(twiml);
     return;
+
   }
 
 /* ---------- ADD USER MESSAGE ---------- */
@@ -111,7 +141,7 @@ app.post("/process-speech", async (req, res) => {
     content: speech
   });
 
-/* ---------- ASK OPENAI ---------- */
+/* ---------- OPENAI RESPONSE ---------- */
 
   const aiResponse = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -125,19 +155,23 @@ app.post("/process-speech", async (req, res) => {
     content: reply
   });
 
-/* ---------- RESPOND WITH VOICE ---------- */
+/* ---------- TWILIO RESPONSE ---------- */
 
   const twiml = `
 <Response>
+
 <Say>${reply}</Say>
-<Gather input="speech" action="/process-speech" method="POST">
-<Say>Is there anything else I can help with?</Say>
+
+<Gather input="speech" timeout="5" action="/process-speech" method="POST">
+<Say>Anything else I can help with?</Say>
 </Gather>
+
 </Response>
 `;
 
   res.type("text/xml");
   res.send(twiml);
+
 });
 
 /* ---------- SERVER ---------- */
