@@ -37,13 +37,15 @@ You are the phone receptionist for Benji's Restaurant.
 Current date and time: ${currentDateTime}
 
 Rules:
-- Maximum 10 words per reply
+- Maximum 15 words per reply
 - Ask ONE question at a time
 - Never say "how are you"
 - Never introduce yourself
 - Never speak in paragraphs
 - Never repeat questions
 - Speak like a busy restaurant receptionist
+- If the caller asks a question, answer it briefly first
+- If the caller asks about availability (for example "is there space tomorrow"), respond naturally and ask what time they prefer
 
 Booking information required:
 1. number of guests
@@ -107,117 +109,4 @@ app.post("/voice", (req, res) => {
 <Say>Hello and welcome to Benji's Restaurant. How may I help you today?</Say>
 
 <Gather input="speech"
-timeout="9"
-speechTimeout="2"
-action="/process-speech"
-method="POST">
-</Gather>
-
-<Say>Sorry, are you still there?</Say>
-
-<Gather input="speech"
-timeout="6"
-speechTimeout="2"
-action="/process-speech"
-method="POST">
-</Gather>
-
-<Say>I'll end the call now. Goodbye.</Say>
-<Hangup/>
-
-</Response>
-`;
-
-  res.type("text/xml");
-  res.send(twiml);
-
-});
-
-/* ---------- PROCESS SPEECH ---------- */
-
-app.post("/process-speech", async (req, res) => {
-
-  const speech = req.body.SpeechResult || "";
-  const lowerSpeech = speech.toLowerCase();
-
-/* ---------- GOODBYE DETECTION ---------- */
-
-  const goodbyeWords = ["bye", "goodbye", "thanks bye", "see you"];
-
-  if (goodbyeWords.some(word => lowerSpeech.includes(word))) {
-
-    const twiml = `
-<Response>
-<Say>Goodbye.</Say>
-<Hangup/>
-</Response>
-`;
-
-    res.type("text/xml");
-    res.send(twiml);
-    return;
-  }
-
-/* ---------- ADD USER MESSAGE ---------- */
-
-  conversationHistory.push({
-    role: "user",
-    content: speech
-  });
-
-/* ---------- OPENAI RESPONSE ---------- */
-
-  const aiResponse = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    messages: conversationHistory
-  });
-
-  const reply = aiResponse.choices[0].message.content;
-
-  conversationHistory.push({
-    role: "assistant",
-    content: reply
-  });
-
-/* ---------- TWILIO RESPONSE ---------- */
-
-  const twiml = `
-<Response>
-
-<Say>${reply}</Say>
-
-<Gather input="speech"
-timeout="9"
-speechTimeout="2"
-action="/process-speech"
-method="POST">
-</Gather>
-
-<Say>Sorry, are you still there?</Say>
-
-<Gather input="speech"
-timeout="6"
-speechTimeout="2"
-action="/process-speech"
-method="POST">
-</Gather>
-
-<Say>I'll end the call now. Goodbye.</Say>
-<Hangup/>
-
-</Response>
-`;
-
-  res.type("text/xml");
-  res.send(twiml);
-
-});
-
-/* ---------- SERVER ---------- */
-
-const PORT = process.env.PORT || 10000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
+timeout
