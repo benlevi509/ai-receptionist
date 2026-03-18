@@ -11,32 +11,53 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* ---------- CURRENT DATE ---------- */
+/* ---------- CURRENT DATE + TIME ---------- */
 
-const today = new Date().toDateString();
+function getCurrentDateTime() {
+  const now = new Date();
+  return now.toLocaleString("en-GB", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
 
 /* ---------- SYSTEM PROMPT ---------- */
 
-const SYSTEM_PROMPT = `
-You are a restaurant receptionist answering the phone.
+function getSystemPrompt() {
 
-Today's date is ${today}.
+const currentDateTime = getCurrentDateTime();
+
+return `
+You are the phone receptionist for Benji's Restaurant.
+
+Current date and time: ${currentDateTime}
 
 Rules:
-- Maximum 10 words per response
-- Ask ONE question only
+- Maximum 10 words per reply
+- Ask ONE question at a time
 - Never say "how are you"
 - Never introduce yourself
 - Never speak in paragraphs
 - Never repeat questions
-- Never give long explanations
-- Speak like a real busy receptionist
+- Speak like a busy restaurant receptionist
 
 Booking information required:
 1. number of guests
 2. date
 3. time
 4. name
+
+If the caller says words like:
+"today"
+"tomorrow"
+"tonight"
+"next Friday"
+
+You must understand the correct calendar date using the current date.
 
 Example replies:
 "For how many guests?"
@@ -45,9 +66,10 @@ Example replies:
 
 Never speak more than one sentence.
 `;
+}
 
 let conversationHistory = [
-  { role: "system", content: SYSTEM_PROMPT }
+  { role: "system", content: getSystemPrompt() }
 ];
 
 /* ---------- TEST AI ---------- */
@@ -69,17 +91,32 @@ app.get("/test-ai", async (req, res) => {
 app.post("/voice", (req, res) => {
 
   conversationHistory = [
-    { role: "system", content: SYSTEM_PROMPT }
+    { role: "system", content: getSystemPrompt() }
   ];
 
   const twiml = `
 <Response>
 
-<Say>Benji's Restaurant. How can I help?</Say>
+<Say>Hello and welcome to Benji's Restaurant. How may I help you today?</Say>
 
-<Gather input="speech" timeout="2" action="/process-speech" method="POST">
-<Say>Please tell me your booking request.</Say>
+<Gather input="speech"
+timeout="9"
+action="/process-speech"
+method="POST">
+
 </Gather>
+
+<Say>Sorry, are you still there?</Say>
+
+<Gather input="speech"
+timeout="6"
+action="/process-speech"
+method="POST">
+
+</Gather>
+
+<Say>I'll end the call now. Goodbye.</Say>
+<Hangup/>
 
 </Response>
 `;
@@ -96,28 +133,9 @@ app.post("/process-speech", async (req, res) => {
   const speech = req.body.SpeechResult || "";
   const lowerSpeech = speech.toLowerCase();
 
-/* ---------- SILENCE DETECTION ---------- */
-
-  if (!speech) {
-
-    const twiml = `
-<Response>
-<Say>Sorry, please repeat.</Say>
-
-<Gather input="speech" timeout="2" action="/process-speech" method="POST"/>
-
-</Response>
-`;
-
-    res.type("text/xml");
-    res.send(twiml);
-    return;
-
-  }
-
 /* ---------- GOODBYE DETECTION ---------- */
 
-  const goodbyeWords = ["bye", "goodbye", "thanks bye"];
+  const goodbyeWords = ["bye", "goodbye", "thanks bye", "see you"];
 
   if (goodbyeWords.some(word => lowerSpeech.includes(word))) {
 
@@ -131,7 +149,6 @@ app.post("/process-speech", async (req, res) => {
     res.type("text/xml");
     res.send(twiml);
     return;
-
   }
 
 /* ---------- ADD USER MESSAGE ---------- */
@@ -163,9 +180,24 @@ app.post("/process-speech", async (req, res) => {
 
 <Say>${reply}</Say>
 
-<Gather input="speech" timeout="2" action="/process-speech" method="POST">
-<Say>Anything else?</Say>
+<Gather input="speech"
+timeout="9"
+action="/process-speech"
+method="POST">
+
 </Gather>
+
+<Say>Sorry, are you still there?</Say>
+
+<Gather input="speech"
+timeout="6"
+action="/process-speech"
+method="POST">
+
+</Gather>
+
+<Say>I'll end the call now. Goodbye.</Say>
+<Hangup/>
 
 </Response>
 `;
