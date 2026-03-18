@@ -108,7 +108,7 @@ app.post("/voice", (req, res) => {
 
 <Gather input="speech"
 timeout="9"
-speechTimeout="auto"
+speechTimeout="2"
 action="/process-speech"
 method="POST">
 </Gather>
@@ -189,7 +189,7 @@ app.post("/process-speech", async (req, res) => {
 
 <Gather input="speech"
 timeout="9"
-speechTimeout="auto"
+speechTimeout="2"
 action="/process-speech"
 method="POST">
 </Gather>
@@ -198,7 +198,7 @@ method="POST">
 
 <Gather input="speech"
 timeout="6"
-speechTimeout="auto"
+speechTimeout="2"
 action="/process-speech"
 method="POST">
 </Gather>
