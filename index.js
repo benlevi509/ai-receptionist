@@ -19,40 +19,22 @@ You are the receptionist for Benji's Restaurant.
 Speak like a calm, friendly human receptionist.
 
 Rules:
-
-- Keep answers short.
+- Keep responses short.
 - Ask only ONE question at a time.
 - Never ask for multiple booking details at once.
 
-If someone wants a booking, collect information step by step:
-
+Booking flow:
 1. number of people
 2. date
 3. time
 4. name
 
-Example conversation:
-
+Example:
 Customer: I'd like to book a table.
-
 You: Of course. How many people will be dining?
 
-Customer answers.
-
-You: Great. What date were you thinking of?
-
-Customer answers.
-
-You: And roughly what time?
-
-Customer answers.
-
-You: Perfect. Could I take the name for the booking?
-
-Be natural and polite.
+Be natural and relaxed. Never sound robotic.
 `;
-
-/* ---------- MEMORY ---------- */
 
 let conversationHistory = [
   { role: "system", content: SYSTEM_PROMPT }
@@ -61,9 +43,7 @@ let conversationHistory = [
 /* ---------- TEST ROUTE ---------- */
 
 app.get("/test-ai", async (req, res) => {
-
   try {
-
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: conversationHistory
@@ -72,12 +52,9 @@ app.get("/test-ai", async (req, res) => {
     res.send(response.choices[0].message.content);
 
   } catch (error) {
-
     console.error(error);
     res.status(500).send("AI test failed");
-
   }
-
 });
 
 /* ---------- INCOMING CALL ---------- */
@@ -104,18 +81,14 @@ speechTimeout="auto">
 
 </Gather>
 
-<Say>Sorry, I didn't hear anything. Are you still there?</Say>
+<Say>Hello, are you still there?</Say>
 
 <Gather
 input="speech"
 action="https://ai-receptionist-iopm.onrender.com/process-speech"
 method="POST"
 timeout="10"
-speechTimeout="auto">
-
-<Say>Please let me know how I can help.</Say>
-
-</Gather>
+speechTimeout="auto"/>
 
 <Say>Okay, feel free to call us again if you need anything. Goodbye.</Say>
 
@@ -162,11 +135,16 @@ input="speech"
 action="https://ai-receptionist-iopm.onrender.com/process-speech"
 method="POST"
 timeout="10"
-speechTimeout="auto">
+speechTimeout="auto"/>
 
-<Say>Go ahead.</Say>
+<Say>Hello, are you still there?</Say>
 
-</Gather>
+<Gather
+input="speech"
+action="https://ai-receptionist-iopm.onrender.com/process-speech"
+method="POST"
+timeout="10"
+speechTimeout="auto"/>
 
 <Say>Thanks for calling Benji's Restaurant. Goodbye.</Say>
 
