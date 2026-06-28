@@ -72,8 +72,8 @@ function formatDate(text) {
 function extractPeople(text) {
   const lower = text.toLowerCase();
 
-  const numberMatch = lower.match(/\b(\d+)\b/);
-  if (numberMatch) return `${numberMatch[1]} people`;
+  const peopleMatch = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
+  if (peopleMatch) return `${peopleMatch[1]} people`;
 
   const words = {
     one: 1,
@@ -91,7 +91,8 @@ function extractPeople(text) {
   };
 
   for (const word in words) {
-    if (lower.includes(word)) return `${words[word]} people`;
+    const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
+    if (regex.test(lower)) return `${words[word]} people`;
   }
 
   return null;
@@ -117,7 +118,12 @@ function extractTime(text) {
     return explicitTime[1] + (explicitTime[2] || "") + explicitTime[3];
   }
 
-  const casualTime = lower.match(/\b(?:for|at)\s+(\d{1,2})(:\d{2})?\b/);
+  const oclockTime = lower.match(/\b(\d{1,2})\s*(o'clock|oclock)\b/);
+  if (oclockTime) {
+    return oclockTime[1] + "pm";
+  }
+
+  const casualTime = lower.match(/\b(?:for|at|space at|availability at)\s+(\d{1,2})(:\d{2})?\b/);
   if (casualTime) {
     return casualTime[1] + (casualTime[2] || "") + "pm";
   }
@@ -183,7 +189,9 @@ function wantsBooking(text) {
     "booking",
     "reservation",
     "reserve",
-    "table"
+    "table",
+    "space",
+    "availability"
   ].some(p => lower.includes(p));
 }
 
@@ -198,7 +206,9 @@ function asksAvailability(text) {
     "anything available",
     "do you have space",
     "have you got space",
-    "is there space"
+    "is there space",
+    "space at",
+    "availability at"
   ].some(p => lower.includes(p));
 }
 
@@ -226,15 +236,9 @@ function sayAndGather(reply) {
   return `
 <Response>
 <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
-
-<Gather input="speech" timeout="10" speechTimeout="1.2" action="/process-speech" method="POST">
-</Gather>
-
+<Gather input="speech" timeout="10" speechTimeout="1.2" action="/process-speech" method="POST"></Gather>
 <Say voice="Polly.Brian" language="en-GB">Sorry, I didn't catch that.</Say>
-
-<Gather input="speech" timeout="20" speechTimeout="1.2" action="/process-speech" method="POST">
-</Gather>
-
+<Gather input="speech" timeout="20" speechTimeout="1.2" action="/process-speech" method="POST"></Gather>
 <Say voice="Polly.Brian" language="en-GB">Thanks for calling. Have a great day.</Say>
 <Pause length="1"/>
 <Hangup/>
@@ -290,25 +294,28 @@ function handleBooking(speech) {
   const people = extractPeople(speech);
   const date = formatDate(speech);
   const time = extractTime(speech);
+  const availabilityQuestion = asksAvailability(speech);
+
+  if (people && !booking.people) booking.people = people;
+  if (date && !booking.date) booking.date = date;
 
   if (pendingTime && confirms(speech)) {
     booking.time = pendingTime;
     pendingTime = null;
   }
 
-  if (bookingStep === "people" && people) booking.people = people;
-  if (bookingStep === "date" && date) booking.date = date;
-
-  if (bookingStep === "time" && time) {
-    if (asksAvailability(speech)) {
+  if (time && !booking.time) {
+    if (availabilityQuestion) {
       pendingTime = time;
-      return `Yes, we should have availability at ${time}. Shall I book that for you?`;
-    } else {
-      booking.time = time;
+      return `Yes, we should have space at ${time}. Shall I book that for you?`;
     }
+
+    booking.time = time;
   }
 
-  if (bookingStep === "name") booking.name = extractName(speech);
+  if (bookingStep === "name") {
+    booking.name = extractName(speech);
+  }
 
   if (!booking.people) {
     bookingStep = "people";
