@@ -11,8 +11,23 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+/* ---------- STATE ---------- */
+
+let conversationHistory = [];
+let booking = {
+  people: null,
+  date: null,
+  time: null,
+  name: null
+};
+let bookingActive = false;
+let lastQuestion = null;
+
+/* ---------- HELPERS ---------- */
+
 function getCurrentDateTime() {
   const now = new Date();
+
   return now.toLocaleString("en-GB", {
     weekday: "long",
     year: "numeric",
@@ -32,41 +47,13 @@ function escapeXml(text) {
     .replace(/'/g, "&apos;");
 }
 
-let conversationHistory = [];
-let booking = {};
-let bookingStep = null;
-
-function getSystemPrompt() {
-  return `
-You are a clear, natural phone receptionist for Benji's Restaurant.
-
-Current date and time: ${getCurrentDateTime()}
-
-Rules:
-- Maximum 12 words per reply.
-- Sound casual, clear, and human.
-- Do not sound posh, formal, robotic, or overly cheerful.
-- Do not overuse "of course".
-- Vary your wording.
-- Ask one question at a time.
-- Never say "how are you".
-- Never mention AI.
-- Never speak in paragraphs.
-
-Booking wording:
-Say "How many people is the table for?"
-Do not say "guests joining you".
-
-After a booking is confirmed, ask:
-"Anything else I can help with?"
-
-If the caller is finished, say:
-"Perfect, thanks for calling. Have a great day."
-`;
+function hasAllBookingDetails() {
+  return booking.people && booking.date && booking.time && booking.name;
 }
 
 function isEndingPhrase(text) {
   const lower = text.toLowerCase();
+
   return [
     "bye",
     "goodbye",
@@ -77,20 +64,22 @@ function isEndingPhrase(text) {
     "nothing else",
     "no thanks",
     "no thank you",
-    "thank you",
-    "thanks"
-  ].some(p => lower.includes(p));
+    "all good",
+    "that's everything",
+    "thats everything"
+  ].some(phrase => lower.includes(phrase));
 }
 
 function wantsBooking(text) {
   const lower = text.toLowerCase();
+
   return [
     "book",
     "booking",
     "reservation",
     "reserve",
     "table"
-  ].some(p => lower.includes(p));
+  ].some(word => lower.includes(word));
 }
 
 function twilioSayAndGather(reply) {
@@ -117,16 +106,99 @@ function twilioSayAndHangup(reply) {
 `;
 }
 
-async function getAIReply(speech) {
+/* ---------- AI PROMPTS ---------- */
+
+function getReceptionistPrompt() {
+  return `
+You are a clear, natural phone receptionist for Benji's Restaurant.
+
+Current date and time: ${getCurrentDateTime()}
+
+Style:
+- Sound clear, relaxed, and human.
+- Do not sound posh, formal, robotic, or overly cheerful.
+- Maximum 12 words per reply.
+- Ask one question at a time.
+- Never say "how are you".
+- Never mention AI.
+- Do not overuse "of course".
+- Vary your wording naturally.
+- Speak in one sentence only.
+
+Opening style:
+"Hello, welcome to Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?"
+
+Booking wording:
+Say "How many people is the table for?"
+Do not say "guests joining you".
+
+After confirming a booking:
+Ask "Anything else I can help with?"
+
+If finished:
+Say "Perfect, thanks for calling. Have a great day."
+`;
+}
+
+async function extractBookingDetails(speech) {
+  const extractionPrompt = `
+Current date and time: ${getCurrentDateTime()}
+
+Extract booking details from the caller's sentence.
+
+Return ONLY valid JSON.
+No explanation.
+
+Fields:
+{
+  "people": string or null,
+  "date": string or null,
+  "time": string or null,
+  "name": string or null,
+  "askingAvailability": true or false
+}
+
+Rules:
+- If they say "is 16th June free", date is "16th June" and askingAvailability is true.
+- If they say "for 4 people", people is "4 people".
+- If they say "at 7", time is "7pm" unless clearly morning.
+- Extract only the useful detail, not the full sentence.
+- Do not invent missing fields.
+`;
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0,
+    max_tokens: 80,
+    messages: [
+      { role: "system", content: extractionPrompt },
+      { role: "user", content: speech }
+    ]
+  });
+
+  try {
+    return JSON.parse(response.choices[0].message.content);
+  } catch {
+    return {
+      people: null,
+      date: null,
+      time: null,
+      name: null,
+      askingAvailability: false
+    };
+  }
+}
+
+async function getGeneralAIReply(speech) {
   const messages = [
-    { role: "system", content: getSystemPrompt() },
+    { role: "system", content: getReceptionistPrompt() },
     ...conversationHistory.slice(-6),
     { role: "user", content: speech }
   ];
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    temperature: 0.45,
+    temperature: 0.5,
     max_tokens: 35,
     messages
   });
@@ -134,21 +206,73 @@ async function getAIReply(speech) {
   return response.choices[0].message.content.trim();
 }
 
+/* ---------- BOOKING LOGIC ---------- */
+
+async function handleBookingSpeech(speech) {
+  const extracted = await extractBookingDetails(speech);
+
+  if (extracted.people) booking.people = extracted.people;
+  if (extracted.date) booking.date = extracted.date;
+  if (extracted.time) booking.time = extracted.time;
+  if (extracted.name) booking.name = extracted.name;
+
+  if (extracted.askingAvailability && booking.date && !booking.time) {
+    lastQuestion = "time";
+    return `Yes, ${booking.date} should be fine. What time would you like?`;
+  }
+
+  if (!booking.people) {
+    lastQuestion = "people";
+    return "Sure, how many people is the table for?";
+  }
+
+  if (!booking.date) {
+    lastQuestion = "date";
+    return "Great, what date would you like?";
+  }
+
+  if (!booking.time) {
+    lastQuestion = "time";
+    return "Nice, what time would you like?";
+  }
+
+  if (!booking.name) {
+    lastQuestion = "name";
+    return "Lovely, what name should I put it under?";
+  }
+
+  if (hasAllBookingDetails()) {
+    bookingActive = false;
+    lastQuestion = null;
+
+    return `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else I can help with?`;
+  }
+
+  return "Sorry, could you say that again?";
+}
+
+/* ---------- ROUTES ---------- */
+
 app.get("/test-ai", async (req, res) => {
   res.send("AI receptionist is running.");
 });
 
 app.post("/voice", (req, res) => {
   conversationHistory = [];
-  booking = {};
-  bookingStep = null;
+  booking = {
+    people: null,
+    date: null,
+    time: null,
+    name: null
+  };
+  bookingActive = false;
+  lastQuestion = null;
 
-  const twiml = twilioSayAndGather(
-    "Hello, Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?"
-  );
+  const opening =
+    "Hi, Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?";
 
   res.type("text/xml");
-  res.send(twiml);
+  res.send(twilioSayAndGather(opening));
 });
 
 app.post("/process-speech", async (req, res) => {
@@ -168,32 +292,16 @@ app.post("/process-speech", async (req, res) => {
 
   let reply = "";
 
-  if (wantsBooking(speech) && !bookingStep) {
-    bookingStep = "people";
-    reply = "Sure, how many people is the table for?";
-  } else if (bookingStep === "people") {
-    booking.people = speech;
-    bookingStep = "date";
-    reply = "Great, what date would you like?";
-  } else if (bookingStep === "date") {
-    booking.date = speech;
-    bookingStep = "time";
-    reply = "And what time would you like?";
-  } else if (bookingStep === "time") {
-    booking.time = speech;
-    bookingStep = "name";
-    reply = "Lovely, what name should I put it under?";
-  } else if (bookingStep === "name") {
-    booking.name = speech;
-    bookingStep = "complete";
-    reply = `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time} under ${booking.name}. Anything else I can help with?`;
-  } else {
-    try {
-      reply = await getAIReply(speech);
-    } catch (error) {
-      console.error(error);
-      reply = "Sorry, could you say that again?";
+  try {
+    if (bookingActive || wantsBooking(speech)) {
+      bookingActive = true;
+      reply = await handleBookingSpeech(speech);
+    } else {
+      reply = await getGeneralAIReply(speech);
     }
+  } catch (error) {
+    console.error(error);
+    reply = "Sorry, could you say that again?";
   }
 
   conversationHistory.push({ role: "user", content: speech });
