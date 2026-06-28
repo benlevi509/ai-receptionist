@@ -3,7 +3,6 @@ import bodyParser from "body-parser";
 import OpenAI from "openai";
 
 const app = express();
-
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
@@ -11,32 +10,9 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* ---------- STATE ---------- */
-
 let conversationHistory = [];
-let booking = {
-  people: null,
-  date: null,
-  time: null,
-  name: null
-};
+let booking = {};
 let bookingActive = false;
-let lastQuestion = null;
-
-/* ---------- HELPERS ---------- */
-
-function getCurrentDateTime() {
-  const now = new Date();
-
-  return now.toLocaleString("en-GB", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
 
 function escapeXml(text) {
   return String(text)
@@ -47,8 +23,73 @@ function escapeXml(text) {
     .replace(/'/g, "&apos;");
 }
 
-function hasAllBookingDetails() {
-  return booking.people && booking.date && booking.time && booking.name;
+function cleanDate(text) {
+  let lower = text.toLowerCase();
+
+  const months = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+  ];
+
+  for (const month of months) {
+    const regex = new RegExp(`(\\d{1,2})(st|nd|rd|th)?\\s+(of\\s+)?${month}`, "i");
+    const match = lower.match(regex);
+
+    if (match) {
+      return `${match[1]}${match[2] || "th"} of ${month.charAt(0).toUpperCase() + month.slice(1)}`;
+    }
+  }
+
+  if (lower.includes("today")) return "today";
+  if (lower.includes("tomorrow")) return "tomorrow";
+
+  return text.trim();
+}
+
+function extractPeople(text) {
+  const lower = text.toLowerCase();
+  const numberMatch = lower.match(/\b(\d+)\b/);
+
+  if (numberMatch) return `${numberMatch[1]} people`;
+
+  const words = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10
+  };
+
+  for (const word in words) {
+    if (lower.includes(word)) return `${words[word]} people`;
+  }
+
+  return null;
+}
+
+function extractTime(text) {
+  const lower = text.toLowerCase();
+
+  if (lower.includes("half seven")) return "7:30";
+  if (lower.includes("half six")) return "6:30";
+  if (lower.includes("half eight")) return "8:30";
+  if (lower.includes("half nine")) return "9:30";
+
+  const timeMatch = lower.match(/\b(\d{1,2})(:\d{2})?\s*(pm|am)?\b/);
+
+  if (timeMatch) {
+    let time = timeMatch[1] + (timeMatch[2] || "");
+    if (timeMatch[3]) time += timeMatch[3];
+    else time += "pm";
+    return time;
+  }
+
+  return null;
 }
 
 function isEndingPhrase(text) {
@@ -66,8 +107,9 @@ function isEndingPhrase(text) {
     "no thank you",
     "all good",
     "that's everything",
-    "thats everything"
-  ].some(phrase => lower.includes(phrase));
+    "thank you bye",
+    "thanks bye"
+  ].some(p => lower.includes(p));
 }
 
 function wantsBooking(text) {
@@ -79,17 +121,17 @@ function wantsBooking(text) {
     "reservation",
     "reserve",
     "table"
-  ].some(word => lower.includes(word));
+  ].some(p => lower.includes(p));
 }
 
-function twilioSayAndGather(reply) {
+function sayAndGather(reply) {
   return `
 <Response>
 <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
-<Gather input="speech" timeout="4" speechTimeout="1" action="/process-speech" method="POST">
+<Gather input="speech" timeout="3" speechTimeout="1" action="/process-speech" method="POST">
 </Gather>
 <Say voice="Polly.Brian" language="en-GB">Sorry, I didn't catch that.</Say>
-<Gather input="speech" timeout="4" speechTimeout="1" action="/process-speech" method="POST">
+<Gather input="speech" timeout="3" speechTimeout="1" action="/process-speech" method="POST">
 </Gather>
 <Say voice="Polly.Brian" language="en-GB">Thanks for calling. Have a great day.</Say>
 <Hangup/>
@@ -97,7 +139,7 @@ function twilioSayAndGather(reply) {
 `;
 }
 
-function twilioSayAndHangup(reply) {
+function sayAndHangup(reply) {
   return `
 <Response>
 <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
@@ -106,173 +148,90 @@ function twilioSayAndHangup(reply) {
 `;
 }
 
-/* ---------- AI PROMPTS ---------- */
-
-function getReceptionistPrompt() {
-  return `
-You are a clear, natural phone receptionist for Benji's Restaurant.
-
-Current date and time: ${getCurrentDateTime()}
-
-Style:
-- Sound clear, relaxed, and human.
-- Do not sound posh, formal, robotic, or overly cheerful.
-- Maximum 12 words per reply.
-- Ask one question at a time.
-- Never say "how are you".
-- Never mention AI.
-- Do not overuse "of course".
-- Vary your wording naturally.
-- Speak in one sentence only.
-
-Opening style:
-"Hello, welcome to Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?"
-
-Booking wording:
-Say "How many people is the table for?"
-Do not say "guests joining you".
-
-After confirming a booking:
-Ask "Anything else I can help with?"
-
-If finished:
-Say "Perfect, thanks for calling. Have a great day."
-`;
-}
-
-async function extractBookingDetails(speech) {
-  const extractionPrompt = `
-Current date and time: ${getCurrentDateTime()}
-
-Extract booking details from the caller's sentence.
-
-Return ONLY valid JSON.
-No explanation.
-
-Fields:
-{
-  "people": string or null,
-  "date": string or null,
-  "time": string or null,
-  "name": string or null,
-  "askingAvailability": true or false
-}
-
-Rules:
-- If they say "is 16th June free", date is "16th June" and askingAvailability is true.
-- If they say "for 4 people", people is "4 people".
-- If they say "at 7", time is "7pm" unless clearly morning.
-- Extract only the useful detail, not the full sentence.
-- Do not invent missing fields.
-`;
-
+async function getGeneralReply(speech) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    temperature: 0,
-    max_tokens: 80,
+    temperature: 0.45,
+    max_tokens: 35,
     messages: [
-      { role: "system", content: extractionPrompt },
+      {
+        role: "system",
+        content: `
+You are a clear, natural phone receptionist for Benji's Restaurant.
+Maximum 12 words.
+Sound relaxed and human.
+Do not sound posh or robotic.
+Do not overuse "of course".
+Ask one question at a time.
+Never mention AI.
+`
+      },
+      ...conversationHistory.slice(-4),
       { role: "user", content: speech }
     ]
-  });
-
-  try {
-    return JSON.parse(response.choices[0].message.content);
-  } catch {
-    return {
-      people: null,
-      date: null,
-      time: null,
-      name: null,
-      askingAvailability: false
-    };
-  }
-}
-
-async function getGeneralAIReply(speech) {
-  const messages = [
-    { role: "system", content: getReceptionistPrompt() },
-    ...conversationHistory.slice(-6),
-    { role: "user", content: speech }
-  ];
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.5,
-    max_tokens: 35,
-    messages
   });
 
   return response.choices[0].message.content.trim();
 }
 
-/* ---------- BOOKING LOGIC ---------- */
+function handleBooking(speech) {
+  const lower = speech.toLowerCase();
 
-async function handleBookingSpeech(speech) {
-  const extracted = await extractBookingDetails(speech);
+  const people = extractPeople(speech);
+  const time = extractTime(speech);
+  const date = cleanDate(speech);
 
-  if (extracted.people) booking.people = extracted.people;
-  if (extracted.date) booking.date = extracted.date;
-  if (extracted.time) booking.time = extracted.time;
-  if (extracted.name) booking.name = extracted.name;
+  if (people && !booking.people) booking.people = people;
 
-  if (extracted.askingAvailability && booking.date && !booking.time) {
-    lastQuestion = "time";
-    return `Yes, ${booking.date} should be fine. What time would you like?`;
+  if (
+    (lower.includes("january") || lower.includes("february") || lower.includes("march") ||
+     lower.includes("april") || lower.includes("may") || lower.includes("june") ||
+     lower.includes("july") || lower.includes("august") || lower.includes("september") ||
+     lower.includes("october") || lower.includes("november") || lower.includes("december") ||
+     lower.includes("today") || lower.includes("tomorrow")) &&
+    !booking.date
+  ) {
+    booking.date = date;
   }
 
+  if (time && !booking.time && !lower.includes("people")) booking.time = time;
+
   if (!booking.people) {
-    lastQuestion = "people";
     return "Sure, how many people is the table for?";
   }
 
   if (!booking.date) {
-    lastQuestion = "date";
     return "Great, what date would you like?";
   }
 
   if (!booking.time) {
-    lastQuestion = "time";
-    return "Nice, what time would you like?";
+    return `Yes, ${booking.date} should be fine. What time would you like?`;
   }
 
   if (!booking.name) {
-    lastQuestion = "name";
-    return "Lovely, what name should I put it under?";
-  }
-
-  if (hasAllBookingDetails()) {
-    bookingActive = false;
-    lastQuestion = null;
-
+    booking.name = speech.trim();
     return `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else I can help with?`;
   }
 
-  return "Sorry, could you say that again?";
+  bookingActive = false;
+  return "Anything else I can help with?";
 }
 
-/* ---------- ROUTES ---------- */
-
-app.get("/test-ai", async (req, res) => {
+app.get("/test-ai", (req, res) => {
   res.send("AI receptionist is running.");
 });
 
 app.post("/voice", (req, res) => {
   conversationHistory = [];
-  booking = {
-    people: null,
-    date: null,
-    time: null,
-    name: null
-  };
+  booking = {};
   bookingActive = false;
-  lastQuestion = null;
-
-  const opening =
-    "Hi, Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?";
 
   res.type("text/xml");
-  res.send(twilioSayAndGather(opening));
+  res.send(
+    sayAndGather(
+      "Hello, welcome to Benji's Restaurant. Would you like to make a reservation, ask about the menu, or is there something else I can help with?"
+    )
+  );
 });
 
 app.post("/process-speech", async (req, res) => {
@@ -280,13 +239,13 @@ app.post("/process-speech", async (req, res) => {
 
   if (!speech.trim()) {
     res.type("text/xml");
-    res.send(twilioSayAndGather("Sorry, could you say that again?"));
+    res.send(sayAndGather("Sorry, could you say that again?"));
     return;
   }
 
   if (isEndingPhrase(speech)) {
     res.type("text/xml");
-    res.send(twilioSayAndHangup("Perfect, thanks for calling. Have a great day."));
+    res.send(sayAndHangup("Perfect, thanks for calling. Have a great day."));
     return;
   }
 
@@ -295,9 +254,9 @@ app.post("/process-speech", async (req, res) => {
   try {
     if (bookingActive || wantsBooking(speech)) {
       bookingActive = true;
-      reply = await handleBookingSpeech(speech);
+      reply = handleBooking(speech);
     } else {
-      reply = await getGeneralAIReply(speech);
+      reply = await getGeneralReply(speech);
     }
   } catch (error) {
     console.error(error);
@@ -308,7 +267,7 @@ app.post("/process-speech", async (req, res) => {
   conversationHistory.push({ role: "assistant", content: reply });
 
   res.type("text/xml");
-  res.send(twilioSayAndGather(reply));
+  res.send(sayAndGather(reply));
 });
 
 const PORT = process.env.PORT || 10000;
