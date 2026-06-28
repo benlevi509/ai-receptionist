@@ -1,6 +1,7 @@
 import express from "express";
 import bodyParser from "body-parser";
 import OpenAI from "openai";
+import businessConfig from "./businessConfig.js";
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -264,6 +265,32 @@ function confirms(text) {
   ].some(p => lower.includes(p));
 }
 
+function formatMenuForPrompt(menu) {
+  if (!menu) return "No menu information has been provided.";
+
+  return Object.entries(menu)
+    .map(([section, items]) => {
+      return `${section}: ${items.join(", ")}`;
+    })
+    .join("\n");
+}
+
+function formatOpeningHoursForPrompt(openingHours) {
+  if (!openingHours) return "No opening hours have been provided.";
+
+  return Object.entries(openingHours)
+    .map(([day, hours]) => `${day}: ${hours}`)
+    .join("\n");
+}
+
+function formatCommonQuestionsForPrompt(commonQuestions) {
+  if (!commonQuestions) return "No common question answers have been provided.";
+
+  return Object.entries(commonQuestions)
+    .map(([question, answer]) => `${question}: ${answer}`)
+    .join("\n");
+}
+
 /* ---------- TWILIO ---------- */
 
 function sayAndGather(reply) {
@@ -296,22 +323,42 @@ async function getGeneralReply(speech) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.45,
-    max_tokens: 28,
+    max_tokens: 60,
     messages: [
       {
         role: "system",
         content: `
-You are a natural phone receptionist for Benji's Restaurant.
-Maximum 10 words.
+You are a natural phone receptionist for ${businessConfig.businessName}.
+Business type: ${businessConfig.businessType}.
+Tone: ${businessConfig.tone}.
+
+Address:
+${businessConfig.address}
+
+Phone number:
+${businessConfig.phoneNumber}
+
+Opening hours:
+${formatOpeningHoursForPrompt(businessConfig.openingHours)}
+
+Menu:
+${formatMenuForPrompt(businessConfig.menu)}
+
+Common questions:
+${formatCommonQuestionsForPrompt(businessConfig.commonQuestions)}
+
+Rules:
+Maximum 18 words.
 Sound relaxed, clear, and human.
 Never say "would you like to know more?"
-Never say "enjoy your time at Benji's" unless a booking is fully confirmed.
+Never say "enjoy your time at ${businessConfig.businessName}" unless a booking is fully confirmed.
 After helping, ask: "Is there anything else I can help with?"
 Only mention reservations if it fits naturally.
 Ask one question at a time.
 Never mention AI.
 Do not start every sentence with okay.
 Vary sentence starters naturally.
+If you do not know something, say: "${businessConfig.fallback}"
 `
       },
       ...conversationHistory.slice(-4),
@@ -401,7 +448,7 @@ function handleBooking(speech) {
 /* ---------- ROUTES ---------- */
 
 app.get("/test-ai", (req, res) => {
-  res.send("AI receptionist is running.");
+  res.send(`${businessConfig.businessName} AI receptionist is running.`);
 });
 
 app.post("/voice", (req, res) => {
@@ -412,11 +459,7 @@ app.post("/voice", (req, res) => {
   pendingTime = null;
 
   res.type("text/xml");
-  res.send(
-    sayAndGather(
-      "Hello, welcome to Benji's Restaurant. Would you like to make a reservation, ask about the menu, or something else?"
-    )
-  );
+  res.send(sayAndGather(businessConfig.greeting));
 });
 
 app.post("/process-speech", async (req, res) => {
@@ -464,5 +507,5 @@ app.post("/process-speech", async (req, res) => {
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log(`${businessConfig.businessName} server running on port ${PORT}`);
 });
