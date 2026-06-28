@@ -14,6 +14,7 @@ let conversationHistory = [];
 let booking = {};
 let bookingActive = false;
 let bookingStep = null;
+let pendingTime = null;
 
 /* ---------- HELPERS ---------- */
 
@@ -160,16 +161,16 @@ function isEndingPhrase(text) {
   return [
     "bye",
     "goodbye",
-    "that'll be all",
-    "that will be all",
     "that's all",
     "thats all",
     "nothing else",
     "no thanks",
     "no thank you",
+    "nope",
+    "no that's it",
+    "no thats it",
     "all good",
     "that's everything",
-    "thank you bye",
     "thanks bye"
   ].some(p => lower.includes(p));
 }
@@ -183,6 +184,39 @@ function wantsBooking(text) {
     "reservation",
     "reserve",
     "table"
+  ].some(p => lower.includes(p));
+}
+
+function asksAvailability(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "do you have availability",
+    "have you got availability",
+    "is there availability",
+    "are you available",
+    "anything available",
+    "do you have space",
+    "have you got space",
+    "is there space"
+  ].some(p => lower.includes(p));
+}
+
+function confirms(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "yes",
+    "yeah",
+    "yep",
+    "that's fine",
+    "thats fine",
+    "perfect",
+    "go ahead",
+    "book it",
+    "put it down",
+    "that works",
+    "sounds good"
   ].some(p => lower.includes(p));
 }
 
@@ -232,9 +266,9 @@ async function getGeneralReply(speech) {
 You are a natural phone receptionist for Benji's Restaurant.
 Maximum 10 words.
 Sound relaxed, clear, and human.
-Do not sound posh, creepy, or robotic.
 Never say "would you like to know more?"
-Do not always push reservations.
+Never say "enjoy your time at Benji's" unless a booking is fully confirmed.
+After helping, ask: "Is there anything else I can help with?"
 Only mention reservations if it fits naturally.
 Ask one question at a time.
 Never mention AI.
@@ -257,9 +291,23 @@ function handleBooking(speech) {
   const date = formatDate(speech);
   const time = extractTime(speech);
 
+  if (pendingTime && confirms(speech)) {
+    booking.time = pendingTime;
+    pendingTime = null;
+  }
+
   if (bookingStep === "people" && people) booking.people = people;
   if (bookingStep === "date" && date) booking.date = date;
-  if (bookingStep === "time" && time) booking.time = time;
+
+  if (bookingStep === "time" && time) {
+    if (asksAvailability(speech)) {
+      pendingTime = time;
+      return `Yes, we should have availability at ${time}. Shall I book that for you?`;
+    } else {
+      booking.time = time;
+    }
+  }
+
   if (bookingStep === "name") booking.name = extractName(speech);
 
   if (!booking.people) {
@@ -300,11 +348,12 @@ function handleBooking(speech) {
 
   bookingActive = false;
   bookingStep = null;
+  pendingTime = null;
 
   return randomChoice([
-    `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-    `Lovely, that's ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-    `Great, you're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
+    `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`,
+    `Lovely, that's ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`,
+    `Great, you're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`
   ]);
 }
 
@@ -319,6 +368,7 @@ app.post("/voice", (req, res) => {
   booking = {};
   bookingActive = false;
   bookingStep = null;
+  pendingTime = null;
 
   res.type("text/xml");
   res.send(
@@ -339,7 +389,7 @@ app.post("/process-speech", async (req, res) => {
 
   if (isEndingPhrase(speech)) {
     res.type("text/xml");
-    res.send(sayAndHangup("Perfect, thanks for calling. Have a great day."));
+    res.send(sayAndHangup("No problem, thanks for calling. Goodbye."));
     return;
   }
 
