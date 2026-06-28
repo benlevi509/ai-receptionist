@@ -17,6 +17,10 @@ let bookingStep = null;
 
 /* ---------- HELPERS ---------- */
 
+function randomChoice(options) {
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 function escapeXml(text) {
   return String(text)
     .replace(/&/g, "&amp;")
@@ -234,6 +238,8 @@ Do not always push reservations.
 Only mention reservations if it fits naturally.
 Ask one question at a time.
 Never mention AI.
+Do not start every sentence with okay.
+Vary sentence starters naturally.
 `
       },
       ...conversationHistory.slice(-4),
@@ -258,28 +264,48 @@ function handleBooking(speech) {
 
   if (!booking.people) {
     bookingStep = "people";
-    return "Sure, how many people is the table for?";
+    return randomChoice([
+      "Sure, how many people is the table for?",
+      "No problem, how many people is that for?",
+      "Great, how many people will that be?"
+    ]);
   }
 
   if (!booking.date) {
     bookingStep = "date";
-    return "Okay, and what date would you like?";
+    return randomChoice([
+      "Great, what date would you like?",
+      "Perfect, and what date should that be?",
+      "Lovely, what date works best?"
+    ]);
   }
 
   if (!booking.time) {
     bookingStep = "time";
-    return `Okay, ${booking.date} should be fine. What time?`;
+    return randomChoice([
+      "Great, and what time would you like?",
+      "Perfect, what time should I put down?",
+      "Lovely, what time should that be for?"
+    ]);
   }
 
   if (!booking.name) {
     bookingStep = "name";
-    return "Okay, and what name should I put it under?";
+    return randomChoice([
+      "Great, what name should I put it under?",
+      "Perfect, and what's the name please?",
+      "Lovely, what name is that under?"
+    ]);
   }
 
   bookingActive = false;
   bookingStep = null;
 
-  return `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`;
+  return randomChoice([
+    `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+    `Lovely, that's ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+    `Great, you're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
+  ]);
 }
 
 /* ---------- ROUTES ---------- */
