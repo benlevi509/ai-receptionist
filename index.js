@@ -32,6 +32,7 @@ function escapeXml(text) {
 }
 
 function titleCase(word) {
+  if (!word) return "";
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
@@ -72,9 +73,6 @@ function formatDate(text) {
 function extractPeople(text) {
   const lower = text.toLowerCase();
 
-  const peopleMatch = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
-  if (peopleMatch) return `${peopleMatch[1]} people`;
-
   const words = {
     one: 1,
     two: 2,
@@ -90,9 +88,29 @@ function extractPeople(text) {
     twelve: 12
   };
 
+  const phraseNumber = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
+  if (phraseNumber) return `${phraseNumber[1]} people`;
+
+  const explicitPeople = lower.match(/\b(\d+)\s*(people|persons|guests|of us)\b/);
+  if (explicitPeople) return `${explicitPeople[1]} people`;
+
   for (const word in words) {
-    const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
-    if (regex.test(lower)) return `${words[word]} people`;
+    const phraseWord = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
+    if (phraseWord.test(lower)) return `${words[word]} people`;
+
+    const explicitWord = new RegExp(`\\b${word}\\s*(people|persons|guests|of us)\\b`, "i");
+    if (explicitWord.test(lower)) return `${words[word]} people`;
+  }
+
+  if (bookingStep === "people") {
+    const bareNumber = lower.match(/\b(\d+)\b/);
+    if (bareNumber) return `${bareNumber[1]} people`;
+
+    for (const word in words) {
+      if (new RegExp(`\\b${word}\\b`, "i").test(lower)) {
+        return `${words[word]} people`;
+      }
+    }
   }
 
   return null;
@@ -126,6 +144,11 @@ function extractTime(text) {
   const casualTime = lower.match(/\b(?:for|at|space at|availability at)\s+(\d{1,2})(:\d{2})?\b/);
   if (casualTime) {
     return casualTime[1] + (casualTime[2] || "") + "pm";
+  }
+
+  if (bookingStep === "time") {
+    const bareNumber = lower.match(/\b(\d{1,2})\b/);
+    if (bareNumber) return bareNumber[1] + "pm";
   }
 
   return null;
@@ -167,6 +190,8 @@ function isEndingPhrase(text) {
   return [
     "bye",
     "goodbye",
+    "that'll be all",
+    "that will be all",
     "that's all",
     "thats all",
     "nothing else",
@@ -177,6 +202,7 @@ function isEndingPhrase(text) {
     "no thats it",
     "all good",
     "that's everything",
+    "thank you bye",
     "thanks bye"
   ].some(p => lower.includes(p));
 }
@@ -226,7 +252,9 @@ function confirms(text) {
     "book it",
     "put it down",
     "that works",
-    "sounds good"
+    "sounds good",
+    "please do",
+    "yes please"
   ].some(p => lower.includes(p));
 }
 
