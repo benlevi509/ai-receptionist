@@ -16,6 +16,7 @@ let booking = {};
 let bookingActive = false;
 let bookingStep = null;
 let pendingTime = null;
+let pendingName = null;
 
 /* ---------- HELPERS ---------- */
 
@@ -151,34 +152,48 @@ function extractTime(text) {
   return null;
 }
 
-function extractName(text) {
-  let cleaned = text.toLowerCase();
+function cleanName(raw) {
+  if (!raw) return null;
+
+  let cleaned = raw.toLowerCase();
 
   cleaned = cleaned
-    .replace(/^(it's|its|it is)\s+/i, "")
-    .replace(/^under\s+/i, "")
-    .replace(/^for\s+/i, "")
-    .replace(/^my name is\s+/i, "")
-    .replace(/^the name is\s+/i, "")
-    .replace(/^name is\s+/i, "")
-    .replace(/^put it under\s+/i, "")
-    .replace(/^can you put it under\s+/i, "")
-    .replace(/^book it under\s+/i, "")
-    .replace(/^reservation under\s+/i, "")
-    .replace(/please/gi, "")
-    .replace(/thank you/gi, "")
-    .replace(/thanks/gi, "")
+    .replace(/\b(umm|um|uh|erm|er)\b/gi, "")
+    .replace(/\bplease\b/gi, "")
+    .replace(/\bthank you\b/gi, "")
+    .replace(/\bthanks\b/gi, "")
+    .replace(/\bjust\b/gi, "")
+    .replace(/[.,!?]/g, "")
     .trim();
 
   const words = cleaned.split(/\s+/).filter(Boolean);
 
-  if (words.length > 3) {
-    cleaned = words.slice(-2).join(" ");
+  if (!words.length) return null;
+
+  return words.map(titleCase).join(" ");
+}
+
+function extractName(text) {
+  const lower = text.toLowerCase();
+
+  const patterns = [
+    /(?:my name is|name is|the name is)\s+(.+)/i,
+    /(?:put it under|book it under|reservation under|under)\s+(.+)/i,
+    /(?:it's|its|it is)\s+(.+)/i,
+    /(.+?)\s+(?:is the name|for the name)/i,
+    /(?:no|nope),?\s*(?:it's|its|it is|just)?\s+(.+)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) return cleanName(match[1]);
   }
 
-  return cleaned
-    ? cleaned.split(" ").map(titleCase).join(" ")
-    : null;
+  if (bookingStep === "name" || bookingStep === "confirmName") {
+    return cleanName(text);
+  }
+
+  return null;
 }
 
 function isEndingPhrase(text) {
@@ -192,7 +207,8 @@ function isEndingPhrase(text) {
     "nothing else",
     "no thanks",
     "no thank you",
-    "nope",
+    "nope that's all",
+    "nope thats all",
     "no that's it",
     "no thats it",
     "all good",
@@ -247,6 +263,31 @@ function asksAvailability(text) {
   ].some(p => lower.includes(p));
 }
 
+function asksAvailableDates(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "what dates do you have",
+    "what dates are available",
+    "what days do you have",
+    "what days are available",
+    "when are you available",
+    "what availability do you have"
+  ].some(p => lower.includes(p));
+}
+
+function asksAvailableTimes(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "what times do you have",
+    "what times are available",
+    "what time slots",
+    "what slots do you have",
+    "what availability do you have"
+  ].some(p => lower.includes(p));
+}
+
 function confirms(text) {
   const lower = text.toLowerCase();
 
@@ -254,6 +295,9 @@ function confirms(text) {
     "yes",
     "yeah",
     "yep",
+    "correct",
+    "that's right",
+    "thats right",
     "that's fine",
     "thats fine",
     "perfect",
@@ -265,13 +309,24 @@ function confirms(text) {
   ].some(p => lower.includes(p));
 }
 
+function denies(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "no",
+    "nope",
+    "nah",
+    "not right",
+    "wrong",
+    "incorrect"
+  ].some(p => lower.includes(p));
+}
+
 function formatMenuForPrompt(menu) {
   if (!menu) return "No menu information has been provided.";
 
   return Object.entries(menu)
-    .map(([section, items]) => {
-      return `${section}: ${items.join(", ")}`;
-    })
+    .map(([section, items]) => `${section}: ${items.join(", ")}`)
     .join("\n");
 }
 
@@ -322,8 +377,8 @@ function sayAndHangup(reply) {
 async function getGeneralReply(speech) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    temperature: 0.45,
-    max_tokens: 60,
+    temperature: 0.35,
+    max_tokens: 35,
     messages: [
       {
         role: "system",
@@ -348,16 +403,16 @@ Common questions:
 ${formatCommonQuestionsForPrompt(businessConfig.commonQuestions)}
 
 Rules:
-Maximum 18 words.
+Maximum 12 words.
 Sound relaxed, clear, and human.
+Do not overuse words like great, perfect, lovely, or sure.
 Never say "would you like to know more?"
 Never say "enjoy your time at ${businessConfig.businessName}" unless a booking is fully confirmed.
-After helping, ask: "Is there anything else I can help with?"
+After helping, ask briefly if they need anything else.
 Only mention reservations if it fits naturally.
 Ask one question at a time.
 Never mention AI.
 Do not start every sentence with okay.
-Vary sentence starters naturally.
 If you do not know something, say: "${businessConfig.fallback}"
 `
       },
@@ -376,6 +431,43 @@ function handleBooking(speech) {
   const date = formatDate(speech);
   const time = extractTime(speech);
   const availabilityQuestion = asksAvailability(speech);
+  const availableDatesQuestion = asksAvailableDates(speech);
+  const availableTimesQuestion = asksAvailableTimes(speech);
+
+  if (bookingStep === "confirmName") {
+    const correctedName = extractName(speech);
+
+    if (confirms(speech)) {
+      booking.name = pendingName;
+      pendingName = null;
+      bookingActive = false;
+      bookingStep = null;
+
+      return randomChoice([
+        `Booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+        `All set for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
+      ]);
+    }
+
+    if (denies(speech) && correctedName) {
+      pendingName = correctedName;
+      return `I heard ${pendingName}. Is that right?`;
+    }
+
+    if (denies(speech)) {
+      bookingStep = "name";
+      pendingName = null;
+      return "No problem. What name should I put it under?";
+    }
+
+    if (correctedName) {
+      pendingName = correctedName;
+      return `I heard ${pendingName}. Is that right?`;
+    }
+
+    return "Sorry, I didn't catch the name. Could you repeat it?";
+  }
 
   if (people && !booking.people) booking.people = people;
   if (date && !booking.date) booking.date = date;
@@ -388,60 +480,87 @@ function handleBooking(speech) {
   if (time && !booking.time) {
     if (availabilityQuestion) {
       pendingTime = time;
-      return `Yes, we should have space at ${time}. Shall I book that for you?`;
+      return `We should have space at ${time}. Shall I book that?`;
     }
 
     booking.time = time;
   }
 
-  if (bookingStep === "name") {
-    booking.name = extractName(speech);
-  }
-
   if (!booking.people) {
     bookingStep = "people";
+
+    if (availableDatesQuestion || availableTimesQuestion) {
+      return "I can check that. How many people is it for?";
+    }
+
     return randomChoice([
-      "Sure, how many people is the table for?",
-      "No problem, how many people is that for?",
-      "Great, how many people will that be?"
+      "How many people is the table for?",
+      "How many people will that be?",
+      "How many guests should I put down?"
     ]);
   }
 
   if (!booking.date) {
     bookingStep = "date";
+
+    if (availableDatesQuestion) {
+      return "We usually have availability across opening days. Which date suits you?";
+    }
+
+    if (availableTimesQuestion) {
+      return "I can check times after I know the date.";
+    }
+
     return randomChoice([
-      "Great, what date would you like?",
-      "Perfect, and what date should that be?",
-      "Lovely, what date works best?"
+      "What date would you like?",
+      "Which date should I book?",
+      "What day works for you?"
     ]);
   }
 
   if (!booking.time) {
     bookingStep = "time";
+
+    if (availableTimesQuestion || availabilityQuestion) {
+      const earliest = businessConfig.bookingSettings?.earliestBookingTime || "opening";
+      const latest = businessConfig.bookingSettings?.latestBookingTime || "closing";
+      return `Usually between ${earliest} and ${latest}. What time suits you?`;
+    }
+
     return randomChoice([
-      "Great, and what time would you like?",
-      "Perfect, what time should I put down?",
-      "Lovely, what time should that be for?"
+      "What time would you like?",
+      "What time should I put down?",
+      "Which time works for you?"
     ]);
   }
 
   if (!booking.name) {
     bookingStep = "name";
+
+    const name = extractName(speech);
+
+    if (name) {
+      pendingName = name;
+      bookingStep = "confirmName";
+      return `I heard ${pendingName}. Is that right?`;
+    }
+
     return randomChoice([
-      "Great, what name should I put it under?",
-      "Perfect, and what's the name please?",
-      "Lovely, what name is that under?"
+      "What name should I put it under?",
+      "What's the name for the booking?",
+      "Who should I put the booking under?"
     ]);
   }
 
   bookingActive = false;
   bookingStep = null;
   pendingTime = null;
+  pendingName = null;
 
   return randomChoice([
-    `Perfect, table for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`,
-    `Lovely, that's ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`,
-    `Great, you're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can help with?`
+    `Booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+    `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
+    `All set for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
   ]);
 }
 
@@ -457,6 +576,7 @@ app.post("/voice", (req, res) => {
   bookingActive = false;
   bookingStep = null;
   pendingTime = null;
+  pendingName = null;
 
   res.type("text/xml");
   res.send(sayAndGather(businessConfig.greeting));
