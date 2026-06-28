@@ -452,13 +452,17 @@ function handleBooking(speech) {
 
     if (denies(speech) && correctedName) {
       pendingName = correctedName;
-      return `I heard ${pendingName}. Is that right?`;
+      return `No problem, I heard ${pendingName}. Is that right?`;
     }
 
     if (denies(speech)) {
       bookingStep = "name";
       pendingName = null;
-      return "No problem. What name should I put it under?";
+      return randomChoice([
+        "No problem. What name should I put it under?",
+        "That's fine. Who should I put the booking under?",
+        "No worries. What name is best for the reservation?"
+      ]);
     }
 
     if (correctedName) {
@@ -480,7 +484,11 @@ function handleBooking(speech) {
   if (time && !booking.time) {
     if (availabilityQuestion) {
       pendingTime = time;
-      return `We should have space at ${time}. Shall I book that?`;
+      return randomChoice([
+        `We should have space at ${time}. Shall I book that for you?`,
+        `That should be fine for ${time}. Would you like me to reserve it?`,
+        `Yes, ${time} should work. Should I put that down for you?`
+      ]);
     }
 
     booking.time = time;
@@ -490,13 +498,19 @@ function handleBooking(speech) {
     bookingStep = "people";
 
     if (availableDatesQuestion || availableTimesQuestion) {
-      return "I can check that. How many people is it for?";
+      return randomChoice([
+        "I can check that. How many people is it for?",
+        "Of course, how many guests would it be for?",
+        "No problem. How many people should I check for?"
+      ]);
     }
 
     return randomChoice([
-      "How many people is the table for?",
-      "How many people will that be?",
-      "How many guests should I put down?"
+      "Of course, how many people is the table for?",
+      "No problem. How many people will that be?",
+      "Certainly. How many guests should I put down?",
+      "Lovely. How many people is the booking for?",
+      "Sure, how many people are you looking to book for?"
     ]);
   }
 
@@ -504,17 +518,27 @@ function handleBooking(speech) {
     bookingStep = "date";
 
     if (availableDatesQuestion) {
-      return "We usually have availability across opening days. Which date suits you?";
+      return randomChoice([
+        "We usually have availability across opening days. Which date suits you?",
+        "There should be a few options. What date were you thinking?",
+        "I can check that for you. Which date would you like?"
+      ]);
     }
 
     if (availableTimesQuestion) {
-      return "I can check times after I know the date.";
+      return randomChoice([
+        "I can check times after I know the date. What date were you thinking?",
+        "Sure, let me get the date first. Which day would you like?",
+        "No problem. What date should I check for?"
+      ]);
     }
 
     return randomChoice([
-      "What date would you like?",
-      "Which date should I book?",
-      "What day works for you?"
+      "Great, and what date were you thinking?",
+      "Perfect. Which day would you like to book?",
+      "Alright, what date should I put you down for?",
+      "Brilliant, and what date works best for you?",
+      "Thanks. What date would you like the reservation for?"
     ]);
   }
 
@@ -524,13 +548,19 @@ function handleBooking(speech) {
     if (availableTimesQuestion || availabilityQuestion) {
       const earliest = businessConfig.bookingSettings?.earliestBookingTime || "opening";
       const latest = businessConfig.bookingSettings?.latestBookingTime || "closing";
-      return `Usually between ${earliest} and ${latest}. What time suits you?`;
+      return randomChoice([
+        `Usually between ${earliest} and ${latest}. What time suits you?`,
+        `We usually take bookings between ${earliest} and ${latest}. What time were you thinking?`,
+        `It is normally between ${earliest} and ${latest}. What time should I check?`
+      ]);
     }
 
     return randomChoice([
-      "What time would you like?",
-      "What time should I put down?",
-      "Which time works for you?"
+      "Perfect, and what time would you like the reservation for?",
+      "Great. What time should I book it for?",
+      "Okay, and what time suits you?",
+      "Lovely, what time were you thinking?",
+      "Brilliant. What time should I put down?"
     ]);
   }
 
@@ -546,9 +576,12 @@ function handleBooking(speech) {
     }
 
     return randomChoice([
-      "What name should I put it under?",
-      "What's the name for the booking?",
-      "Who should I put the booking under?"
+      "Great, one last question. What name should I put it under?",
+      "Perfect, and who should I make the reservation under?",
+      "Brilliant. What name is the booking under?",
+      "Okay, and what should I put the reservation under?",
+      "Amazing, who am I booking this under?",
+      "Thanks, and what name should I put down?"
     ]);
   }
 
