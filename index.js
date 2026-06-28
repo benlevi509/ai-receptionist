@@ -32,7 +32,6 @@ function escapeXml(text) {
 }
 
 function titleCase(word) {
-  if (!word) return "";
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
@@ -88,19 +87,11 @@ function extractPeople(text) {
     twelve: 12
   };
 
-  const phraseNumber = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
-  if (phraseNumber) return `${phraseNumber[1]} people`;
+  const peoplePhrase = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
+  if (peoplePhrase) return `${peoplePhrase[1]} people`;
 
   const explicitPeople = lower.match(/\b(\d+)\s*(people|persons|guests|of us)\b/);
   if (explicitPeople) return `${explicitPeople[1]} people`;
-
-  for (const word in words) {
-    const phraseWord = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
-    if (phraseWord.test(lower)) return `${words[word]} people`;
-
-    const explicitWord = new RegExp(`\\b${word}\\s*(people|persons|guests|of us)\\b`, "i");
-    if (explicitWord.test(lower)) return `${words[word]} people`;
-  }
 
   if (bookingStep === "people") {
     const bareNumber = lower.match(/\b(\d+)\b/);
@@ -111,6 +102,11 @@ function extractPeople(text) {
         return `${words[word]} people`;
       }
     }
+  }
+
+  for (const word in words) {
+    const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
+    if (regex.test(lower)) return `${words[word]} people`;
   }
 
   return null;
@@ -190,8 +186,6 @@ function isEndingPhrase(text) {
   return [
     "bye",
     "goodbye",
-    "that'll be all",
-    "that will be all",
     "that's all",
     "thats all",
     "nothing else",
@@ -202,8 +196,22 @@ function isEndingPhrase(text) {
     "no thats it",
     "all good",
     "that's everything",
-    "thank you bye",
     "thanks bye"
+  ].some(p => lower.includes(p));
+}
+
+function isAiGoodbye(text) {
+  const lower = text.toLowerCase();
+
+  return [
+    "goodbye",
+    "bye",
+    "have a wonderful",
+    "have a great day",
+    "have a lovely day",
+    "have a nice day",
+    "thanks for calling",
+    "thank you for calling"
   ].some(p => lower.includes(p));
 }
 
@@ -252,9 +260,7 @@ function confirms(text) {
     "book it",
     "put it down",
     "that works",
-    "sounds good",
-    "please do",
-    "yes please"
+    "sounds good"
   ].some(p => lower.includes(p));
 }
 
@@ -447,7 +453,12 @@ app.post("/process-speech", async (req, res) => {
   conversationHistory.push({ role: "assistant", content: reply });
 
   res.type("text/xml");
-  res.send(sayAndGather(reply));
+
+  if (isAiGoodbye(reply)) {
+    res.send(sayAndHangup(reply));
+  } else {
+    res.send(sayAndGather(reply));
+  }
 });
 
 const PORT = process.env.PORT || 10000;
