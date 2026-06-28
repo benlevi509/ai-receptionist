@@ -213,6 +213,9 @@ function isEndingPhrase(text) {
     "no thats it",
     "all good",
     "that's everything",
+    "thats everything",
+    "that's it",
+    "thats it",
     "thanks bye"
   ].some(p => lower.includes(p));
 }
@@ -355,7 +358,7 @@ function sayAndGather(reply) {
 <Gather input="speech" timeout="10" speechTimeout="1.2" action="/process-speech" method="POST"></Gather>
 <Say voice="Polly.Brian" language="en-GB">Sorry, I didn't catch that.</Say>
 <Gather input="speech" timeout="20" speechTimeout="1.2" action="/process-speech" method="POST"></Gather>
-<Say voice="Polly.Brian" language="en-GB">Thanks for calling. Have a great day.</Say>
+<Say voice="Polly.Brian" language="en-GB">Thanks for calling. Have a nice day.</Say>
 <Pause length="1"/>
 <Hangup/>
 </Response>
@@ -405,7 +408,7 @@ ${formatCommonQuestionsForPrompt(businessConfig.commonQuestions)}
 Rules:
 Maximum 12 words.
 Sound relaxed, clear, and human.
-Do not overuse words like great, perfect, lovely, or sure.
+Do not overuse words like great, perfect, lovely, sure, or no problem.
 Never say "would you like to know more?"
 Never say "enjoy your time at ${businessConfig.businessName}" unless a booking is fully confirmed.
 After helping, ask briefly if they need anything else.
@@ -444,24 +447,24 @@ function handleBooking(speech) {
       bookingStep = null;
 
       return randomChoice([
-        `Booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-        `All set for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
+        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+        `All set. That's for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+        `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
       ]);
     }
 
     if (denies(speech) && correctedName) {
       pendingName = correctedName;
-      return `No problem, I heard ${pendingName}. Is that right?`;
+      return `I heard ${pendingName}. Is that right?`;
     }
 
     if (denies(speech)) {
       bookingStep = "name";
       pendingName = null;
       return randomChoice([
-        "No problem. What name should I put it under?",
-        "That's fine. Who should I put the booking under?",
-        "No worries. What name is best for the reservation?"
+        "That's fine. What name should I put the reservation under?",
+        "Of course. Who should I put the booking under?",
+        "Alright. What name is best for the reservation?"
       ]);
     }
 
@@ -499,18 +502,18 @@ function handleBooking(speech) {
 
     if (availableDatesQuestion || availableTimesQuestion) {
       return randomChoice([
-        "I can check that. How many people is it for?",
-        "Of course, how many guests would it be for?",
-        "No problem. How many people should I check for?"
+        "I can check that. How many people is the reservation for?",
+        "Of course. How many people is the booking for?",
+        "Certainly. How many guests is the reservation for?"
       ]);
     }
 
     return randomChoice([
-      "Of course, how many people is the table for?",
-      "No problem. How many people will that be?",
-      "Certainly. How many guests should I put down?",
-      "Lovely. How many people is the booking for?",
-      "Sure, how many people are you looking to book for?"
+      "Of course. How many people is the reservation for?",
+      "Certainly. How many people is the booking for?",
+      "How many people should I make the reservation for?",
+      "How many guests is the booking for?",
+      "And how many people is the reservation for?"
     ]);
   }
 
@@ -529,7 +532,7 @@ function handleBooking(speech) {
       return randomChoice([
         "I can check times after I know the date. What date were you thinking?",
         "Sure, let me get the date first. Which day would you like?",
-        "No problem. What date should I check for?"
+        "Alright. What date should I check for?"
       ]);
     }
 
@@ -549,16 +552,16 @@ function handleBooking(speech) {
       const earliest = businessConfig.bookingSettings?.earliestBookingTime || "opening";
       const latest = businessConfig.bookingSettings?.latestBookingTime || "closing";
       return randomChoice([
-        `Usually between ${earliest} and ${latest}. What time suits you?`,
+        `Usually between ${earliest} and ${latest}. What time should I check?`,
         `We usually take bookings between ${earliest} and ${latest}. What time were you thinking?`,
-        `It is normally between ${earliest} and ${latest}. What time should I check?`
+        `It is normally between ${earliest} and ${latest}. What time should the reservation be?`
       ]);
     }
 
     return randomChoice([
-      "Perfect, and what time would you like the reservation for?",
+      "Perfect, and what time should the reservation be?",
       "Great. What time should I book it for?",
-      "Okay, and what time suits you?",
+      "And what time would you like the booking for?",
       "Lovely, what time were you thinking?",
       "Brilliant. What time should I put down?"
     ]);
@@ -576,10 +579,10 @@ function handleBooking(speech) {
     }
 
     return randomChoice([
-      "Great, one last question. What name should I put it under?",
+      "Great, one last question. What name should I put the reservation under?",
       "Perfect, and who should I make the reservation under?",
       "Brilliant. What name is the booking under?",
-      "Okay, and what should I put the reservation under?",
+      "And what should I put the reservation under?",
       "Amazing, who am I booking this under?",
       "Thanks, and what name should I put down?"
     ]);
@@ -591,9 +594,9 @@ function handleBooking(speech) {
   pendingName = null;
 
   return randomChoice([
-    `Booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-    `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`,
-    `All set for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`
+    `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+    `All set. That's for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+    `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
   ]);
 }
 
@@ -626,7 +629,7 @@ app.post("/process-speech", async (req, res) => {
 
   if (isEndingPhrase(speech)) {
     res.type("text/xml");
-    res.send(sayAndHangup("No problem, thanks for calling. Goodbye."));
+    res.send(sayAndHangup("Okay, have a nice day. Goodbye."));
     return;
   }
 
