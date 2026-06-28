@@ -30,6 +30,15 @@ function titleCase(word) {
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
+function getSuffix(day) {
+  const n = Number(day);
+  if (n >= 11 && n <= 13) return "th";
+  if (n % 10 === 1) return "st";
+  if (n % 10 === 2) return "nd";
+  if (n % 10 === 3) return "rd";
+  return "th";
+}
+
 function formatDate(text) {
   const lower = text.toLowerCase();
 
@@ -53,15 +62,6 @@ function formatDate(text) {
   }
 
   return null;
-}
-
-function getSuffix(day) {
-  const n = Number(day);
-  if (n >= 11 && n <= 13) return "th";
-  if (n % 10 === 1) return "st";
-  if (n % 10 === 2) return "nd";
-  if (n % 10 === 3) return "rd";
-  return "th";
 }
 
 function extractPeople(text) {
@@ -107,28 +107,47 @@ function extractTime(text) {
     if (lower.includes(phrase)) return halfTimes[phrase];
   }
 
-  const timeMatch = lower.match(/\b(\d{1,2})(:\d{2})?\s*(pm|am)?\b/);
+  const explicitTime = lower.match(/\b(\d{1,2})(:\d{2})?\s*(pm|am)\b/);
+  if (explicitTime) {
+    return explicitTime[1] + (explicitTime[2] || "") + explicitTime[3];
+  }
 
-  if (timeMatch) {
-    let time = timeMatch[1] + (timeMatch[2] || "");
-    time += timeMatch[3] || "pm";
-    return time;
+  const casualTime = lower.match(/\b(?:for|at)\s+(\d{1,2})(:\d{2})?\b/);
+  if (casualTime) {
+    return casualTime[1] + (casualTime[2] || "") + "pm";
   }
 
   return null;
 }
 
 function extractName(text) {
-  let cleaned = text
-    .replace(/it's under/i, "")
-    .replace(/its under/i, "")
-    .replace(/under/i, "")
-    .replace(/my name is/i, "")
-    .replace(/the name is/i, "")
-    .replace(/name is/i, "")
+  let cleaned = text.toLowerCase();
+
+  cleaned = cleaned
+    .replace(/^(it's|its|it is)\s+/i, "")
+    .replace(/^under\s+/i, "")
+    .replace(/^for\s+/i, "")
+    .replace(/^my name is\s+/i, "")
+    .replace(/^the name is\s+/i, "")
+    .replace(/^name is\s+/i, "")
+    .replace(/^put it under\s+/i, "")
+    .replace(/^can you put it under\s+/i, "")
+    .replace(/^book it under\s+/i, "")
+    .replace(/^reservation under\s+/i, "")
+    .replace(/please/gi, "")
+    .replace(/thank you/gi, "")
+    .replace(/thanks/gi, "")
     .trim();
 
-  return cleaned || null;
+  const words = cleaned.split(/\s+/).filter(Boolean);
+
+  if (words.length > 3) {
+    cleaned = words.slice(-2).join(" ");
+  }
+
+  return cleaned
+    ? cleaned.split(" ").map(titleCase).join(" ")
+    : null;
 }
 
 function isEndingPhrase(text) {
@@ -179,6 +198,7 @@ function sayAndGather(reply) {
 </Gather>
 
 <Say voice="Polly.Brian" language="en-GB">Thanks for calling. Have a great day.</Say>
+<Pause length="1"/>
 <Hangup/>
 </Response>
 `;
@@ -188,6 +208,7 @@ function sayAndHangup(reply) {
   return `
 <Response>
 <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
+<Pause length="1"/>
 <Hangup/>
 </Response>
 `;
@@ -230,21 +251,10 @@ function handleBooking(speech) {
   const date = formatDate(speech);
   const time = extractTime(speech);
 
-  if (bookingStep === "people" && people) {
-    booking.people = people;
-  }
-
-  if (bookingStep === "date" && date) {
-    booking.date = date;
-  }
-
-  if (bookingStep === "time" && time) {
-    booking.time = time;
-  }
-
-  if (bookingStep === "name") {
-    booking.name = extractName(speech);
-  }
+  if (bookingStep === "people" && people) booking.people = people;
+  if (bookingStep === "date" && date) booking.date = date;
+  if (bookingStep === "time" && time) booking.time = time;
+  if (bookingStep === "name") booking.name = extractName(speech);
 
   if (!booking.people) {
     bookingStep = "people";
@@ -253,17 +263,17 @@ function handleBooking(speech) {
 
   if (!booking.date) {
     bookingStep = "date";
-    return "What date would you like?";
+    return "Okay, and what date would you like?";
   }
 
   if (!booking.time) {
     bookingStep = "time";
-    return `Yes, ${booking.date} should be fine. What time?`;
+    return `Okay, ${booking.date} should be fine. What time?`;
   }
 
   if (!booking.name) {
     bookingStep = "name";
-    return "What name should I put it under?";
+    return "Okay, and what name should I put it under?";
   }
 
   bookingActive = false;
@@ -312,11 +322,7 @@ app.post("/process-speech", async (req, res) => {
   try {
     if (bookingActive || wantsBooking(speech)) {
       bookingActive = true;
-
-      if (!bookingStep) {
-        bookingStep = "people";
-      }
-
+      if (!bookingStep) bookingStep = "people";
       reply = handleBooking(speech);
     } else {
       reply = await getGeneralReply(speech);
