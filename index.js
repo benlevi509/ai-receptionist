@@ -1,6 +1,8 @@
 import express from "express";
 import bodyParser from "body-parser";
 import OpenAI from "openai";
+import { google } from "googleapis";
+import fs from "fs";
 import businessConfig from "./businessConfig.js";
 
 const app = express();
@@ -174,8 +176,6 @@ function cleanName(raw) {
 }
 
 function extractName(text) {
-  const lower = text.toLowerCase();
-
   const patterns = [
     /(?:my name is|name is|the name is)\s+(.+)/i,
     /(?:put it under|book it under|reservation under|under)\s+(.+)/i,
@@ -349,6 +349,53 @@ function formatCommonQuestionsForPrompt(commonQuestions) {
     .join("\n");
 }
 
+/* ---------- GOOGLE SHEETS ---------- */
+
+function getGoogleCredentialsPath() {
+  if (fs.existsSync("/etc/secrets/google-credentials.json")) {
+    return "/etc/secrets/google-credentials.json";
+  }
+
+  return "google-credentials.json";
+}
+
+async function saveBookingToSheet(bookingData) {
+  try {
+    if (!process.env.GOOGLE_SHEET_ID) {
+      console.error("Missing GOOGLE_SHEET_ID environment variable.");
+      return;
+    }
+
+    const auth = new google.auth.GoogleAuth({
+      keyFile: getGoogleCredentialsPath(),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+    });
+
+    const sheets = google.sheets({ version: "v4", auth });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: "Sheet1!A:G",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[
+          new Date().toLocaleString("en-GB", { timeZone: "Europe/London" }),
+          bookingData.name || "",
+          bookingData.people || "",
+          bookingData.date || "",
+          bookingData.time || "",
+          bookingData.phone || "",
+          bookingData.notes || ""
+        ]]
+      }
+    });
+
+    console.log("Booking saved to Google Sheets.");
+  } catch (error) {
+    console.error("Failed to save booking to Google Sheets:", error);
+  }
+}
+
 /* ---------- TWILIO ---------- */
 
 function sayAndGather(reply) {
@@ -429,7 +476,7 @@ If you do not know something, say: "${businessConfig.fallback}"
 
 /* ---------- BOOKING ---------- */
 
-function handleBooking(speech) {
+async function handleBooking(speech) {
   const people = extractPeople(speech);
   const date = formatDate(speech);
   const time = extractTime(speech);
@@ -442,6 +489,10 @@ function handleBooking(speech) {
 
     if (confirms(speech)) {
       booking.name = pendingName;
+
+      const completedBooking = { ...booking };
+      await saveBookingToSheet(completedBooking);
+
       pendingName = null;
       bookingActive = false;
       bookingStep = null;
@@ -588,6 +639,9 @@ function handleBooking(speech) {
     ]);
   }
 
+  const completedBooking = { ...booking };
+  await saveBookingToSheet(completedBooking);
+
   bookingActive = false;
   bookingStep = null;
   pendingTime = null;
@@ -639,7 +693,7 @@ app.post("/process-speech", async (req, res) => {
     if (bookingActive || wantsBooking(speech)) {
       bookingActive = true;
       if (!bookingStep) bookingStep = "people";
-      reply = handleBooking(speech);
+      reply = await handleBooking(speech);
     } else {
       reply = await getGeneralReply(speech);
     }
