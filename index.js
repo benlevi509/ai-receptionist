@@ -97,7 +97,7 @@ function extractPeople(text) {
   const explicitPeople = lower.match(/\b(\d+)\s*(people|persons|guests|of us)\b/);
   if (explicitPeople) return `${explicitPeople[1]} people`;
 
-  if (bookingStep === "people") {
+  if (bookingStep === "people" || bookingStep === "correction") {
     const bareNumber = lower.match(/\b(\d+)\b/);
     if (bareNumber) return `${bareNumber[1]} people`;
 
@@ -141,12 +141,12 @@ function extractTime(text) {
     return oclockTime[1] + "pm";
   }
 
-  const casualTime = lower.match(/\b(?:for|at|space at|availability at)\s+(\d{1,2})(:\d{2})?\b/);
+  const casualTime = lower.match(/\b(?:for|at|space at|availability at|time is|change time to)\s+(\d{1,2})(:\d{2})?\b/);
   if (casualTime) {
     return casualTime[1] + (casualTime[2] || "") + "pm";
   }
 
-  if (bookingStep === "time") {
+  if (bookingStep === "time" || bookingStep === "correction") {
     const bareNumber = lower.match(/\b(\d{1,2})\b/);
     if (bareNumber) return bareNumber[1] + "pm";
   }
@@ -349,6 +349,10 @@ function formatCommonQuestionsForPrompt(commonQuestions) {
     .join("\n");
 }
 
+function bookingSummaryQuestion() {
+  return `Just to confirm, that's a reservation for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is that all correct?`;
+}
+
 /* ---------- GOOGLE SHEETS ---------- */
 
 function getGoogleCredentialsPath() {
@@ -477,6 +481,7 @@ If you do not know something, say: "${businessConfig.fallback}"
 /* ---------- BOOKING ---------- */
 
 async function handleBooking(speech) {
+  const startingStep = bookingStep;
   const people = extractPeople(speech);
   const date = formatDate(speech);
   const time = extractTime(speech);
@@ -484,24 +489,92 @@ async function handleBooking(speech) {
   const availableDatesQuestion = asksAvailableDates(speech);
   const availableTimesQuestion = asksAvailableTimes(speech);
 
-  if (bookingStep === "confirmName") {
+  if (startingStep === "confirmDetails") {
+    if (confirms(speech)) {
+      const completedBooking = { ...booking };
+      await saveBookingToSheet(completedBooking);
+
+      bookingActive = false;
+      bookingStep = null;
+      pendingTime = null;
+      pendingName = null;
+
+      return randomChoice([
+        `All set. You're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
+        `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
+      ]);
+    }
+
+    if (denies(speech)) {
+      bookingStep = "correction";
+      return "Of course. Which part is wrong: the people, date, time, or name?";
+    }
+
+    return "Sorry, is that booking correct?";
+  }
+
+  if (startingStep === "correction") {
+    const lower = speech.toLowerCase();
+    const correctedPeople = extractPeople(speech);
+    const correctedDate = formatDate(speech);
+    const correctedTime = extractTime(speech);
+    const correctedName = extractName(speech);
+
+    if (lower.includes("people") || lower.includes("guests") || lower.includes("table for") || lower.includes("party of")) {
+      if (correctedPeople) {
+        booking.people = correctedPeople;
+        bookingStep = "confirmDetails";
+        return bookingSummaryQuestion();
+      }
+
+      booking.people = null;
+      bookingStep = "people";
+      return "No worries. How many people is the reservation for?";
+    }
+
+    if (lower.includes("date") || lower.includes("day") || correctedDate) {
+      if (correctedDate) {
+        booking.date = correctedDate;
+        bookingStep = "confirmDetails";
+        return bookingSummaryQuestion();
+      }
+
+      booking.date = null;
+      bookingStep = "date";
+      return "No worries. What date should I change it to?";
+    }
+
+    if (lower.includes("time") || correctedTime) {
+      if (correctedTime) {
+        booking.time = correctedTime;
+        bookingStep = "confirmDetails";
+        return bookingSummaryQuestion();
+      }
+
+      booking.time = null;
+      bookingStep = "time";
+      return "No worries. What time should I change it to?";
+    }
+
+    if (lower.includes("name") || lower.includes("under") || correctedName) {
+      booking.name = null;
+      pendingName = null;
+      bookingStep = "name";
+      return "No worries. What name should I put the reservation under?";
+    }
+
+    return "Which part should I change: the people, date, time, or name?";
+  }
+
+  if (startingStep === "confirmName") {
     const correctedName = extractName(speech);
 
     if (confirms(speech)) {
       booking.name = pendingName;
-
-      const completedBooking = { ...booking };
-      await saveBookingToSheet(completedBooking);
-
       pendingName = null;
-      bookingActive = false;
-      bookingStep = null;
-
-      return randomChoice([
-        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-        `All set. That's for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-        `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
-      ]);
+      bookingStep = "confirmDetails";
+      return bookingSummaryQuestion();
     }
 
     if (denies(speech) && correctedName) {
@@ -527,25 +600,25 @@ async function handleBooking(speech) {
     return "Sorry, I didn't catch the name. Could you repeat it?";
   }
 
-  if (people && !booking.people) booking.people = people;
-  if (date && !booking.date) booking.date = date;
+  if (startingStep === "name") {
+    const name = extractName(speech);
+
+    if (name) {
+      pendingName = name;
+      bookingStep = "confirmName";
+      return `I heard ${pendingName}. Is that right?`;
+    }
+
+    return "Sorry, what name should I put the reservation under?";
+  }
 
   if (pendingTime && confirms(speech)) {
     booking.time = pendingTime;
     pendingTime = null;
   }
 
-  if (time && !booking.time) {
-    if (availabilityQuestion) {
-      pendingTime = time;
-      return randomChoice([
-        `We should have space at ${time}. Shall I book that for you?`,
-        `That should be fine for ${time}. Would you like me to reserve it?`,
-        `Yes, ${time} should work. Should I put that down for you?`
-      ]);
-    }
-
-    booking.time = time;
+  if (people && !booking.people) {
+    booking.people = people;
   }
 
   if (!booking.people) {
@@ -566,6 +639,10 @@ async function handleBooking(speech) {
       "How many guests is the booking for?",
       "And how many people is the reservation for?"
     ]);
+  }
+
+  if (date && !booking.date) {
+    booking.date = date;
   }
 
   if (!booking.date) {
@@ -596,6 +673,19 @@ async function handleBooking(speech) {
     ]);
   }
 
+  if (time && !booking.time) {
+    if (availabilityQuestion) {
+      pendingTime = time;
+      return randomChoice([
+        `We should have space at ${time}. Shall I book that for you?`,
+        `That should be fine for ${time}. Would you like me to reserve it?`,
+        `Yes, ${time} should work. Should I put that down for you?`
+      ]);
+    }
+
+    booking.time = time;
+  }
+
   if (!booking.time) {
     bookingStep = "time";
 
@@ -621,14 +711,6 @@ async function handleBooking(speech) {
   if (!booking.name) {
     bookingStep = "name";
 
-    const name = extractName(speech);
-
-    if (name) {
-      pendingName = name;
-      bookingStep = "confirmName";
-      return `I heard ${pendingName}. Is that right?`;
-    }
-
     return randomChoice([
       "Great, one last question. What name should I put the reservation under?",
       "Perfect, and who should I make the reservation under?",
@@ -639,19 +721,8 @@ async function handleBooking(speech) {
     ]);
   }
 
-  const completedBooking = { ...booking };
-  await saveBookingToSheet(completedBooking);
-
-  bookingActive = false;
-  bookingStep = null;
-  pendingTime = null;
-  pendingName = null;
-
-  return randomChoice([
-    `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-    `All set. That's for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-    `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
-  ]);
+  bookingStep = "confirmDetails";
+  return bookingSummaryQuestion();
 }
 
 /* ---------- ROUTES ---------- */
