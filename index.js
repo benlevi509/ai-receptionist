@@ -9,9 +9,7 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 let conversationHistory = [];
 let booking = {};
@@ -19,6 +17,10 @@ let bookingActive = false;
 let bookingStep = null;
 let pendingTime = null;
 let pendingName = null;
+
+const TIME_ZONE = "Europe/London";
+const SHEET_RANGE = "Sheet1!A:G";
+const SLOT_MINUTES = 30;
 
 /* ---------- HELPERS ---------- */
 
@@ -36,59 +38,239 @@ function escapeXml(text) {
 }
 
 function titleCase(word) {
+  if (!word) return "";
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
-function getSuffix(day) {
-  const n = Number(day);
-  if (n >= 11 && n <= 13) return "th";
-  if (n % 10 === 1) return "st";
-  if (n % 10 === 2) return "nd";
-  if (n % 10 === 3) return "rd";
-  return "th";
+function getLondonNow() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: TIME_ZONE }));
 }
+
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
+function formatDateForSheet(dateObj) {
+  return `${pad(dateObj.getDate())}/${pad(dateObj.getMonth() + 1)}/${dateObj.getFullYear()}`;
+}
+
+function formatDisplayTime(totalMinutes) {
+  let hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const suffix = hours >= 12 ? "PM" : "AM";
+
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+
+  return `${hours}:${pad(minutes)} ${suffix}`;
+}
+
+function parseTimeToMinutes(timeText) {
+  if (!timeText) return null;
+
+  const lower = String(timeText).toLowerCase().trim();
+  const match = lower.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = match[3].toLowerCase();
+
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+
+  if (meridiem === "pm" && hour !== 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+
+  return hour * 60 + minute;
+}
+
+function roundUpToNextSlot(minutes) {
+  return Math.ceil(minutes / SLOT_MINUTES) * SLOT_MINUTES;
+}
+
+function getTodayMinutes() {
+  const now = getLondonNow();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+function getGoogleCredentialsPath() {
+  if (fs.existsSync("/etc/secrets/google-credentials.json")) {
+    return "/etc/secrets/google-credentials.json";
+  }
+  return "google-credentials.json";
+}
+
+async function getSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: getGoogleCredentialsPath(),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
+
+  return google.sheets({ version: "v4", auth });
+}
+
+/* ---------- DATE / TIME EXTRACTION ---------- */
 
 function formatDate(text) {
   const lower = text.toLowerCase();
+  const now = getLondonNow();
 
-  if (lower.includes("today")) return "today";
-  if (lower.includes("tomorrow")) return "tomorrow";
+  if (lower.includes("today")) {
+    return formatDateForSheet(now);
+  }
+
+  if (lower.includes("tomorrow")) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return formatDateForSheet(tomorrow);
+  }
 
   const months = [
     "january", "february", "march", "april", "may", "june",
     "july", "august", "september", "october", "november", "december"
   ];
 
-  for (const month of months) {
+  for (let i = 0; i < months.length; i++) {
+    const month = months[i];
     const regex = new RegExp(`(\\d{1,2})(st|nd|rd|th)?\\s*(of\\s+)?${month}`, "i");
     const match = lower.match(regex);
 
     if (match) {
-      const day = match[1];
-      const suffix = match[2] || getSuffix(day);
-      return `the ${day}${suffix} of ${titleCase(month)}`;
+      const day = Number(match[1]);
+      const year = now.getFullYear();
+
+      const dateObj = new Date(year, i, day);
+
+      if (dateObj < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+        dateObj.setFullYear(year + 1);
+      }
+
+      return formatDateForSheet(dateObj);
     }
+  }
+
+  const numericDate = lower.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
+  if (numericDate) {
+    const day = Number(numericDate[1]);
+    const month = Number(numericDate[2]) - 1;
+    let year = numericDate[3] ? Number(numericDate[3]) : now.getFullYear();
+    if (year < 100) year += 2000;
+
+    return formatDateForSheet(new Date(year, month, day));
   }
 
   return null;
 }
 
+function extractTime(text) {
+  const lower = text.toLowerCase();
+
+  const wordNumbers = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+  };
+
+  const halfTimes = {
+    "half one": "1:30 PM",
+    "half two": "2:30 PM",
+    "half three": "3:30 PM",
+    "half four": "4:30 PM",
+    "half five": "5:30 PM",
+    "half six": "6:30 PM",
+    "half seven": "7:30 PM",
+    "half eight": "8:30 PM",
+    "half nine": "9:30 PM",
+    "half ten": "10:30 PM",
+    "half eleven": "11:30 PM",
+    "half twelve": "12:30 PM"
+  };
+
+  for (const phrase in halfTimes) {
+    if (lower.includes(phrase)) return halfTimes[phrase];
+  }
+
+  const explicitTime = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(pm|am)\b/i);
+  if (explicitTime) {
+    return `${explicitTime[1]}:${explicitTime[2] || "00"} ${explicitTime[3].toUpperCase()}`;
+  }
+
+  const oclockNumber = lower.match(/\b(\d{1,2})\s*(o'clock|oclock|clock)\b/i);
+  if (oclockNumber) {
+    const hour = Number(oclockNumber[1]);
+    return `${hour}:00 PM`;
+  }
+
+  for (const word in wordNumbers) {
+    const regex = new RegExp(`\\b${word}\\s*(o'clock|oclock|clock)\\b`, "i");
+    if (regex.test(lower)) {
+      return `${wordNumbers[word]}:00 PM`;
+    }
+  }
+
+  const casualTime = lower.match(/\b(?:for|at|around|about)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (casualTime) {
+    return `${casualTime[1]}:${casualTime[2] || "00"} PM`;
+  }
+
+  if (bookingStep === "time" || bookingStep === "correction") {
+    const bareNumber = lower.match(/\b(\d{1,2})\b/);
+    if (bareNumber) return `${bareNumber[1]}:00 PM`;
+  }
+
+  return null;
+}
+
+/* ---------- SMART NAME CLEANING ---------- */
+
+function cleanName(raw) {
+  if (!raw) return null;
+
+  let cleaned = raw.toLowerCase();
+
+  cleaned = cleaned
+    .replace(/\b(um+|umm+|uh+|erm+|er+|ah+|like|basically|actually|please|thanks|thank you|mate)\b/gi, " ")
+    .replace(/\b(my name is|name is|the name is|it is|it's|its|put it under|book it under|reservation under|under|call me|i am|i'm|im)\b/gi, " ")
+    .replace(/[^a-zA-Z\s'-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const badWords = ["reservation", "booking", "table", "people", "person", "today", "tomorrow"];
+  let words = cleaned.split(" ").filter(Boolean).filter(w => !badWords.includes(w));
+
+  if (!words.length) return null;
+
+  words = words.slice(0, 3);
+
+  return words.map(titleCase).join(" ");
+}
+
+function extractName(text) {
+  const patterns = [
+    /(?:my name is|name is|the name is|put it under|book it under|reservation under|under|call me|i am|i'm|im)\s+(.+)/i,
+    /(.+?)\s+(?:is the name|for the name)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) return cleanName(match[1]);
+  }
+
+  if (bookingStep === "name" || bookingStep === "confirmName") {
+    return cleanName(text);
+  }
+
+  return null;
+}
+
+/* ---------- PEOPLE ---------- */
+
 function extractPeople(text) {
   const lower = text.toLowerCase();
 
   const words = {
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10,
-    eleven: 11,
-    twelve: 12
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
   };
 
   const peoplePhrase = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
@@ -116,218 +298,161 @@ function extractPeople(text) {
   return null;
 }
 
-function extractTime(text) {
-  const lower = text.toLowerCase();
+/* ---------- AVAILABILITY ---------- */
 
-  const halfTimes = {
-    "half six": "6:30pm",
-    "half seven": "7:30pm",
-    "half eight": "8:30pm",
-    "half nine": "9:30pm",
-    "half ten": "10:30pm"
+async function getExistingBookings() {
+  try {
+    const sheets = await getSheetsClient();
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: SHEET_RANGE
+    });
+
+    const rows = response.data.values || [];
+    return rows.slice(1).map(row => ({
+      date: row[3] || "",
+      time: row[4] || ""
+    }));
+  } catch (error) {
+    console.error("Failed to read bookings:", error);
+    return [];
+  }
+}
+
+async function isSlotTaken(date, time) {
+  const bookings = await getExistingBookings();
+  const requestedMinutes = parseTimeToMinutes(time);
+
+  return bookings.some(b => {
+    if (b.date !== date) return false;
+    const existingMinutes = parseTimeToMinutes(b.time);
+    return existingMinutes === requestedMinutes;
+  });
+}
+
+async function findNextAvailableSlot(date, requestedTime) {
+  let minutes = parseTimeToMinutes(requestedTime);
+  if (minutes === null) return null;
+
+  minutes = roundUpToNextSlot(minutes);
+
+  const now = getLondonNow();
+  const today = formatDateForSheet(now);
+
+  if (date === today && minutes <= getTodayMinutes()) {
+    minutes = roundUpToNextSlot(getTodayMinutes() + 1);
+  }
+
+  const latest = parseTimeToMinutes(
+    businessConfig.bookingSettings?.latestBookingTime || "10:00 PM"
+  ) || 22 * 60;
+
+  while (minutes <= latest) {
+    const displayTime = formatDisplayTime(minutes);
+    const taken = await isSlotTaken(date, displayTime);
+
+    if (!taken) return displayTime;
+
+    minutes += SLOT_MINUTES;
+  }
+
+  return null;
+}
+
+async function validateRequestedSlot(date, time) {
+  const requestedMinutes = parseTimeToMinutes(time);
+
+  if (requestedMinutes === null) {
+    return {
+      ok: false,
+      reason: "invalid",
+      suggestion: null
+    };
+  }
+
+  if (requestedMinutes % SLOT_MINUTES !== 0) {
+    const suggestion = await findNextAvailableSlot(date, time);
+    return {
+      ok: false,
+      reason: "not_half_hour",
+      suggestion
+    };
+  }
+
+  const today = formatDateForSheet(getLondonNow());
+
+  if (date === today && requestedMinutes <= getTodayMinutes()) {
+    const suggestion = await findNextAvailableSlot(date, time);
+    return {
+      ok: false,
+      reason: "past",
+      suggestion
+    };
+  }
+
+  const taken = await isSlotTaken(date, time);
+
+  if (taken) {
+    const suggestion = await findNextAvailableSlot(date, time);
+    return {
+      ok: false,
+      reason: "taken",
+      suggestion
+    };
+  }
+
+  return {
+    ok: true,
+    reason: null,
+    suggestion: null
   };
-
-  for (const phrase in halfTimes) {
-    if (lower.includes(phrase)) return halfTimes[phrase];
-  }
-
-  const explicitTime = lower.match(/\b(\d{1,2})(:\d{2})?\s*(pm|am)\b/);
-  if (explicitTime) {
-    return explicitTime[1] + (explicitTime[2] || "") + explicitTime[3];
-  }
-
-  const oclockTime = lower.match(/\b(\d{1,2})\s*(o'clock|oclock)\b/);
-  if (oclockTime) {
-    return oclockTime[1] + "pm";
-  }
-
-  const casualTime = lower.match(/\b(?:for|at|space at|availability at|time is|change time to)\s+(\d{1,2})(:\d{2})?\b/);
-  if (casualTime) {
-    return casualTime[1] + (casualTime[2] || "") + "pm";
-  }
-
-  if (bookingStep === "time" || bookingStep === "correction") {
-    const bareNumber = lower.match(/\b(\d{1,2})\b/);
-    if (bareNumber) return bareNumber[1] + "pm";
-  }
-
-  return null;
 }
 
-function cleanName(raw) {
-  if (!raw) return null;
-
-  let cleaned = raw.toLowerCase();
-
-  cleaned = cleaned
-    .replace(/\b(umm|um|uh|erm|er)\b/gi, "")
-    .replace(/\bplease\b/gi, "")
-    .replace(/\bthank you\b/gi, "")
-    .replace(/\bthanks\b/gi, "")
-    .replace(/\bjust\b/gi, "")
-    .replace(/[.,!?]/g, "")
-    .trim();
-
-  const words = cleaned.split(/\s+/).filter(Boolean);
-
-  if (!words.length) return null;
-
-  return words.map(titleCase).join(" ");
-}
-
-function extractName(text) {
-  const patterns = [
-    /(?:my name is|name is|the name is)\s+(.+)/i,
-    /(?:put it under|book it under|reservation under|under)\s+(.+)/i,
-    /(?:it's|its|it is)\s+(.+)/i,
-    /(.+?)\s+(?:is the name|for the name)/i,
-    /(?:no|nope),?\s*(?:it's|its|it is|just)?\s+(.+)/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match && match[1]) return cleanName(match[1]);
-  }
-
-  if (bookingStep === "name" || bookingStep === "confirmName") {
-    return cleanName(text);
-  }
-
-  return null;
-}
+/* ---------- INTENT HELPERS ---------- */
 
 function isEndingPhrase(text) {
   const lower = text.toLowerCase();
-
   return [
-    "bye",
-    "goodbye",
-    "that's all",
-    "thats all",
-    "nothing else",
-    "no thanks",
-    "no thank you",
-    "nope that's all",
-    "nope thats all",
-    "no that's it",
-    "no thats it",
-    "all good",
-    "that's everything",
-    "thats everything",
-    "that's it",
-    "thats it",
-    "thanks bye"
+    "bye", "goodbye", "that's all", "thats all", "nothing else",
+    "no thanks", "no thank you", "nope that's all", "nope thats all",
+    "no that's it", "no thats it", "all good", "that's everything",
+    "thats everything", "that's it", "thats it", "thanks bye"
   ].some(p => lower.includes(p));
 }
 
 function isAiGoodbye(text) {
   const lower = text.toLowerCase();
-
   return [
-    "goodbye",
-    "bye",
-    "have a wonderful",
-    "have a great day",
-    "have a lovely day",
-    "have a nice day",
-    "thanks for calling",
+    "goodbye", "bye", "have a wonderful", "have a great day",
+    "have a lovely day", "have a nice day", "thanks for calling",
     "thank you for calling"
   ].some(p => lower.includes(p));
 }
 
 function wantsBooking(text) {
   const lower = text.toLowerCase();
-
-  return [
-    "book",
-    "booking",
-    "reservation",
-    "reserve",
-    "table",
-    "space",
-    "availability"
-  ].some(p => lower.includes(p));
-}
-
-function asksAvailability(text) {
-  const lower = text.toLowerCase();
-
-  return [
-    "do you have availability",
-    "have you got availability",
-    "is there availability",
-    "are you available",
-    "anything available",
-    "do you have space",
-    "have you got space",
-    "is there space",
-    "space at",
-    "availability at"
-  ].some(p => lower.includes(p));
-}
-
-function asksAvailableDates(text) {
-  const lower = text.toLowerCase();
-
-  return [
-    "what dates do you have",
-    "what dates are available",
-    "what days do you have",
-    "what days are available",
-    "when are you available",
-    "what availability do you have"
-  ].some(p => lower.includes(p));
-}
-
-function asksAvailableTimes(text) {
-  const lower = text.toLowerCase();
-
-  return [
-    "what times do you have",
-    "what times are available",
-    "what time slots",
-    "what slots do you have",
-    "what availability do you have"
-  ].some(p => lower.includes(p));
+  return ["book", "booking", "reservation", "reserve", "table", "space", "availability"]
+    .some(p => lower.includes(p));
 }
 
 function confirms(text) {
   const lower = text.toLowerCase();
-
   return [
-    "yes",
-    "yeah",
-    "yep",
-    "correct",
-    "that's right",
-    "thats right",
-    "that's fine",
-    "thats fine",
-    "perfect",
-    "go ahead",
-    "book it",
-    "put it down",
-    "that works",
-    "sounds good"
+    "yes", "yeah", "yep", "correct", "that's right", "thats right",
+    "that's fine", "thats fine", "perfect", "go ahead", "book it",
+    "put it down", "that works", "sounds good"
   ].some(p => lower.includes(p));
 }
 
 function denies(text) {
   const lower = text.toLowerCase();
-
-  return [
-    "no",
-    "nope",
-    "nah",
-    "not right",
-    "wrong",
-    "incorrect"
-  ].some(p => lower.includes(p));
+  return ["no", "nope", "nah", "not right", "wrong", "incorrect"]
+    .some(p => lower.includes(p));
 }
 
 function formatMenuForPrompt(menu) {
   if (!menu) return "No menu information has been provided.";
-
   return Object.entries(menu)
     .map(([section, items]) => `${section}: ${items.join(", ")}`)
     .join("\n");
@@ -335,7 +460,6 @@ function formatMenuForPrompt(menu) {
 
 function formatOpeningHoursForPrompt(openingHours) {
   if (!openingHours) return "No opening hours have been provided.";
-
   return Object.entries(openingHours)
     .map(([day, hours]) => `${day}: ${hours}`)
     .join("\n");
@@ -343,7 +467,6 @@ function formatOpeningHoursForPrompt(openingHours) {
 
 function formatCommonQuestionsForPrompt(commonQuestions) {
   if (!commonQuestions) return "No common question answers have been provided.";
-
   return Object.entries(commonQuestions)
     .map(([question, answer]) => `${question}: ${answer}`)
     .join("\n");
@@ -353,15 +476,7 @@ function bookingSummaryQuestion() {
   return `Just to confirm, that's a reservation for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is that all correct?`;
 }
 
-/* ---------- GOOGLE SHEETS ---------- */
-
-function getGoogleCredentialsPath() {
-  if (fs.existsSync("/etc/secrets/google-credentials.json")) {
-    return "/etc/secrets/google-credentials.json";
-  }
-
-  return "google-credentials.json";
-}
+/* ---------- GOOGLE SHEETS SAVE ---------- */
 
 async function saveBookingToSheet(bookingData) {
   try {
@@ -370,20 +485,15 @@ async function saveBookingToSheet(bookingData) {
       return;
     }
 
-    const auth = new google.auth.GoogleAuth({
-      keyFile: getGoogleCredentialsPath(),
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-    });
-
-    const sheets = google.sheets({ version: "v4", auth });
+    const sheets = await getSheetsClient();
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: "Sheet1!A:G",
+      range: SHEET_RANGE,
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
-          new Date().toLocaleString("en-GB", { timeZone: "Europe/London" }),
+          new Date().toLocaleString("en-GB", { timeZone: TIME_ZONE }),
           bookingData.name || "",
           bookingData.people || "",
           bookingData.date || "",
@@ -429,6 +539,8 @@ function sayAndHangup(reply) {
 /* ---------- GENERAL AI ---------- */
 
 async function getGeneralReply(speech) {
+  const now = getLondonNow();
+
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.35,
@@ -440,6 +552,9 @@ async function getGeneralReply(speech) {
 You are a natural phone receptionist for ${businessConfig.businessName}.
 Business type: ${businessConfig.businessType}.
 Tone: ${businessConfig.tone}.
+
+Current London date and time:
+${now.toString()}
 
 Address:
 ${businessConfig.address}
@@ -459,14 +574,8 @@ ${formatCommonQuestionsForPrompt(businessConfig.commonQuestions)}
 Rules:
 Maximum 12 words.
 Sound relaxed, clear, and human.
-Do not overuse words like great, perfect, lovely, sure, or no problem.
-Never say "would you like to know more?"
-Never say "enjoy your time at ${businessConfig.businessName}" unless a booking is fully confirmed.
-After helping, ask briefly if they need anything else.
-Only mention reservations if it fits naturally.
-Ask one question at a time.
 Never mention AI.
-Do not start every sentence with okay.
+Ask one question at a time.
 If you do not know something, say: "${businessConfig.fallback}"
 `
       },
@@ -478,16 +587,14 @@ If you do not know something, say: "${businessConfig.fallback}"
   return response.choices[0].message.content.trim();
 }
 
-/* ---------- BOOKING ---------- */
+/* ---------- BOOKING FLOW ---------- */
 
 async function handleBooking(speech) {
   const startingStep = bookingStep;
+
   const people = extractPeople(speech);
   const date = formatDate(speech);
   const time = extractTime(speech);
-  const availabilityQuestion = asksAvailability(speech);
-  const availableDatesQuestion = asksAvailableDates(speech);
-  const availableTimesQuestion = asksAvailableTimes(speech);
 
   if (startingStep === "confirmDetails") {
     if (confirms(speech)) {
@@ -499,16 +606,12 @@ async function handleBooking(speech) {
       pendingTime = null;
       pendingName = null;
 
-      return randomChoice([
-        `All set. You're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-        `That's booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`,
-        `Your reservation is booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Is there anything else I can assist you with?`
-      ]);
+      return `All set. You're booked for ${booking.people} on ${booking.date} at ${booking.time}, under ${booking.name}. Anything else?`;
     }
 
     if (denies(speech)) {
       bookingStep = "correction";
-      return "Of course. Which part is wrong: the people, date, time, or name?";
+      return "Of course. Which part is wrong: people, date, time, or name?";
     }
 
     return "Sorry, is that booking correct?";
@@ -521,50 +624,64 @@ async function handleBooking(speech) {
     const correctedTime = extractTime(speech);
     const correctedName = extractName(speech);
 
-    if (lower.includes("people") || lower.includes("guests") || lower.includes("table for") || lower.includes("party of")) {
-      if (correctedPeople) {
-        booking.people = correctedPeople;
-        bookingStep = "confirmDetails";
-        return bookingSummaryQuestion();
-      }
-
-      booking.people = null;
-      bookingStep = "people";
-      return "No worries. How many people is the reservation for?";
+    if (lower.includes("people") || lower.includes("guest") || correctedPeople) {
+      booking.people = correctedPeople;
+      bookingStep = "confirmDetails";
+      return bookingSummaryQuestion();
     }
 
     if (lower.includes("date") || lower.includes("day") || correctedDate) {
-      if (correctedDate) {
-        booking.date = correctedDate;
-        bookingStep = "confirmDetails";
-        return bookingSummaryQuestion();
-      }
-
-      booking.date = null;
-      bookingStep = "date";
-      return "No worries. What date should I change it to?";
+      booking.date = correctedDate;
+      booking.time = null;
+      bookingStep = "time";
+      return "No problem. What time should I check for that date?";
     }
 
     if (lower.includes("time") || correctedTime) {
-      if (correctedTime) {
-        booking.time = correctedTime;
-        bookingStep = "confirmDetails";
-        return bookingSummaryQuestion();
+      const validation = await validateRequestedSlot(booking.date, correctedTime);
+
+      if (!validation.ok) {
+        if (validation.suggestion) {
+          pendingTime = validation.suggestion;
+          bookingStep = "confirmSuggestedTime";
+          return `${correctedTime} isn't available. I can do ${validation.suggestion}. Shall I book that?`;
+        }
+
+        return "Sorry, I can't find a suitable slot for that time.";
       }
 
-      booking.time = null;
-      bookingStep = "time";
-      return "No worries. What time should I change it to?";
+      booking.time = correctedTime;
+      bookingStep = "confirmDetails";
+      return bookingSummaryQuestion();
     }
 
     if (lower.includes("name") || lower.includes("under") || correctedName) {
       booking.name = null;
       pendingName = null;
       bookingStep = "name";
-      return "No worries. What name should I put the reservation under?";
+      return "No worries. What name should I put it under?";
     }
 
-    return "Which part should I change: the people, date, time, or name?";
+    return "Which part should I change: people, date, time, or name?";
+  }
+
+  if (startingStep === "confirmSuggestedTime") {
+    if (confirms(speech)) {
+      booking.time = pendingTime;
+      pendingTime = null;
+      bookingStep = booking.name ? "confirmDetails" : "name";
+
+      if (booking.name) return bookingSummaryQuestion();
+      return "Great. What name should I put the reservation under?";
+    }
+
+    if (denies(speech)) {
+      pendingTime = null;
+      bookingStep = "time";
+      return "No problem. What other time would you like?";
+    }
+
+    return "Sorry, should I book that suggested time?";
   }
 
   if (startingStep === "confirmName") {
@@ -577,19 +694,10 @@ async function handleBooking(speech) {
       return bookingSummaryQuestion();
     }
 
-    if (denies(speech) && correctedName) {
-      pendingName = correctedName;
-      return `I heard ${pendingName}. Is that right?`;
-    }
-
     if (denies(speech)) {
       bookingStep = "name";
       pendingName = null;
-      return randomChoice([
-        "That's fine. What name should I put the reservation under?",
-        "Of course. Who should I put the booking under?",
-        "Alright. What name is best for the reservation?"
-      ]);
+      return "No problem. What name should I put it under?";
     }
 
     if (correctedName) {
@@ -597,7 +705,7 @@ async function handleBooking(speech) {
       return `I heard ${pendingName}. Is that right?`;
     }
 
-    return "Sorry, I didn't catch the name. Could you repeat it?";
+    return "Sorry, what name should I put the reservation under?";
   }
 
   if (startingStep === "name") {
@@ -612,75 +720,44 @@ async function handleBooking(speech) {
     return "Sorry, what name should I put the reservation under?";
   }
 
-  if (pendingTime && confirms(speech)) {
-    booking.time = pendingTime;
-    pendingTime = null;
-  }
-
-  if (people && !booking.people) {
-    booking.people = people;
-  }
+  if (people && !booking.people) booking.people = people;
 
   if (!booking.people) {
     bookingStep = "people";
-
-    if (availableDatesQuestion || availableTimesQuestion) {
-      return randomChoice([
-        "I can check that. How many people is the reservation for?",
-        "Of course. How many people is the booking for?",
-        "Certainly. How many guests is the reservation for?"
-      ]);
-    }
-
-    return randomChoice([
-      "Of course. How many people is the reservation for?",
-      "Certainly. How many people is the booking for?",
-      "How many people should I make the reservation for?",
-      "How many guests is the booking for?",
-      "And how many people is the reservation for?"
-    ]);
+    return "Of course. How many people is the reservation for?";
   }
 
-  if (date && !booking.date) {
-    booking.date = date;
-  }
+  if (date && !booking.date) booking.date = date;
 
   if (!booking.date) {
     bookingStep = "date";
-
-    if (availableDatesQuestion) {
-      return randomChoice([
-        "We usually have availability across opening days. Which date suits you?",
-        "There should be a few options. What date were you thinking?",
-        "I can check that for you. Which date would you like?"
-      ]);
-    }
-
-    if (availableTimesQuestion) {
-      return randomChoice([
-        "I can check times after I know the date. What date were you thinking?",
-        "Sure, let me get the date first. Which day would you like?",
-        "Alright. What date should I check for?"
-      ]);
-    }
-
-    return randomChoice([
-      "Great, and what date were you thinking?",
-      "Perfect. Which day would you like to book?",
-      "Alright, what date should I put you down for?",
-      "Brilliant, and what date works best for you?",
-      "Thanks. What date would you like the reservation for?"
-    ]);
+    return "Great. What date would you like the reservation for?";
   }
 
   if (time && !booking.time) {
-    if (availabilityQuestion) {
-      pendingTime = time;
-      return randomChoice([
-        `We should have space at ${time}. Shall I book that for you?`,
-        `That should be fine for ${time}. Would you like me to reserve it?`,
-        `Yes, ${time} should work. Should I put that down for you?`
-      ]);
+    const validation = await validateRequestedSlot(booking.date, time);
+
+    if (!validation.ok) {
+      if (validation.suggestion) {
+        pendingTime = validation.suggestion;
+        bookingStep = "confirmSuggestedTime";
+
+        if (validation.reason === "past") {
+          return `${time} has already passed. I can do ${validation.suggestion}. Shall I book that?`;
+        }
+
+        if (validation.reason === "not_half_hour") {
+          return `Bookings are every 30 minutes. I can do ${validation.suggestion}. Shall I book that?`;
+        }
+
+        if (validation.reason === "taken") {
+          return `${time} is already booked. I can do ${validation.suggestion}. Shall I book that?`;
+        }
+
+        return `I can do ${validation.suggestion}. Shall I book that?`;
+      }
+
+      return "Sorry, I can't find a suitable available slot for that time.";
     }
 
     booking.time = time;
@@ -688,37 +765,12 @@ async function handleBooking(speech) {
 
   if (!booking.time) {
     bookingStep = "time";
-
-    if (availableTimesQuestion || availabilityQuestion) {
-      const earliest = businessConfig.bookingSettings?.earliestBookingTime || "opening";
-      const latest = businessConfig.bookingSettings?.latestBookingTime || "closing";
-      return randomChoice([
-        `Usually between ${earliest} and ${latest}. What time should I check?`,
-        `We usually take bookings between ${earliest} and ${latest}. What time were you thinking?`,
-        `It is normally between ${earliest} and ${latest}. What time should the reservation be?`
-      ]);
-    }
-
-    return randomChoice([
-      "Perfect, and what time should the reservation be?",
-      "Great. What time should I book it for?",
-      "And what time would you like the booking for?",
-      "Lovely, what time were you thinking?",
-      "Brilliant. What time should I put down?"
-    ]);
+    return "Perfect. What time should I book it for?";
   }
 
   if (!booking.name) {
     bookingStep = "name";
-
-    return randomChoice([
-      "Great, one last question. What name should I put the reservation under?",
-      "Perfect, and who should I make the reservation under?",
-      "Brilliant. What name is the booking under?",
-      "And what should I put the reservation under?",
-      "Amazing, who am I booking this under?",
-      "Thanks, and what name should I put down?"
-    ]);
+    return "Great, one last question. What name should I put it under?";
   }
 
   bookingStep = "confirmDetails";
@@ -770,7 +822,7 @@ app.post("/process-speech", async (req, res) => {
     }
   } catch (error) {
     console.error(error);
-    reply = "Sorry, could you say that again?";
+    reply = "Sorry, something went wrong. Could you repeat that?";
   }
 
   conversationHistory.push({ role: "user", content: speech });
