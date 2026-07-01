@@ -2,41 +2,36 @@ const businessConfig = {
   businessName: "Bella Roma",
   businessType: "Italian restaurant",
 
-  greeting:
-    "Hello, welcome to Bella Roma. Would you like to make a booking, ask about the menu, or something else?",
+  greeting: "Good day, Bella Roma, how can I help you today?",
 
   tone:
-    "Friendly, natural, professional London restaurant receptionist. Not robotic, not overly posh.",
+    "Warm, confident, experienced restaurant receptionist. Speak naturally like someone who has worked on reception for years. Be polite, efficient and conversational. Never sound robotic or like an AI.",
 
   address: "123 High Road, Finchley, London",
 
   phoneNumber: "020 0000 0000",
 
   openingHours: {
-    monday: "12:00pm - 10:00pm",
-    tuesday: "12:00pm - 10:00pm",
-    wednesday: "12:00pm - 10:00pm",
-    thursday: "12:00pm - 10:00pm",
-    friday: "12:00pm - 11:00pm",
-    saturday: "12:00pm - 11:00pm",
-    sunday: "12:00pm - 8:00pm"
+    monday: "9:00am - 11:00pm",
+    tuesday: "9:00am - 11:00pm",
+    wednesday: "9:00am - 11:00pm",
+    thursday: "9:00am - 11:00pm",
+    friday: "9:00am - 11:00pm",
+    saturday: "9:00am - 11:00pm",
+    sunday: "9:00am - 11:00pm"
   },
 
   bookingSettings: {
     maxBookingsPerSlot: 4,
     bookingIntervalMinutes: 30,
     defaultBookingLengthMinutes: 90,
-    earliestBookingTime: "12:00pm",
-    latestBookingTime: "9:30pm"
+    earliestBookingTime: "9:00 AM",
+    latestBookingTime: "11:00 PM",
+    maximumPartySize: 6
   },
 
   menu: {
-    starters: [
-      "Garlic bread",
-      "Bruschetta",
-      "Calamari",
-      "Caprese salad"
-    ],
+    starters: ["Garlic bread", "Bruschetta", "Calamari", "Caprese salad"],
     mains: [
       "Margherita pizza",
       "Pepperoni pizza",
@@ -45,11 +40,7 @@ const businessConfig = {
       "Chicken Milanese",
       "Sea bass"
     ],
-    desserts: [
-      "Tiramisu",
-      "Panna cotta",
-      "Chocolate fondant"
-    ],
+    desserts: ["Tiramisu", "Panna cotta", "Chocolate fondant"],
     drinks: [
       "Soft drinks",
       "Still water",
@@ -62,12 +53,17 @@ const businessConfig = {
   commonQuestions: {
     parking: "There is limited street parking nearby.",
     halal: "Some dishes may be suitable, but please ask staff when ordering.",
-    vegetarian: "Yes, we have vegetarian options including pizza, pasta, and salads.",
+    vegetarian:
+      "Yes, we have vegetarian options including pizza, pasta, and salads.",
     vegan: "We have a few vegan options. The staff can confirm on arrival.",
-    glutenFree: "We have some gluten-free options, but please mention this when booking.",
+    glutenFree:
+      "We have some gluten-free options, but please mention this when booking.",
     delivery: "We currently offer collection, but not delivery.",
     takeaway: "Yes, takeaway is available.",
-    wheelchairAccess: "Yes, the restaurant has wheelchair access."
+    wheelchairAccess: "Yes, the restaurant has wheelchair access.",
+    highChairs: "Yes, high chairs are available.",
+    birthday:
+      "Yes, we can make a note if the booking is for a birthday or special occasion."
   },
 
   fallback:
