@@ -10,34 +10,46 @@ function escapeXml(text) {
 export function sayAndGather(reply) {
   return `
 <Response>
-<Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
-
-<Gather
-    input="speech"
-    timeout="10"
-    speechTimeout="1.2"
-    action="/process-speech"
-    method="POST">
-</Gather>
 
 <Say voice="Polly.Brian" language="en-GB">
-Sorry, I didn't catch that.
+${escapeXml(reply)}
 </Say>
 
 <Gather
     input="speech"
-    timeout="20"
-    speechTimeout="1.2"
     action="/process-speech"
-    method="POST">
+    method="POST"
+    language="en-GB"
+    speechModel="phone_call"
+    speechTimeout="auto"
+    timeout="8"
+    enhanced="true">
 </Gather>
 
 <Say voice="Polly.Brian" language="en-GB">
-Thanks for calling. Goodbye.
+Are you still there?
+</Say>
+
+<Gather
+    input="speech"
+    action="/process-speech"
+    method="POST"
+    language="en-GB"
+    speechModel="phone_call"
+    speechTimeout="auto"
+    timeout="8"
+    enhanced="true">
+</Gather>
+
+<Say voice="Polly.Brian" language="en-GB">
+I'll end the call now. Thank you for calling ${escapeXml(
+  "the restaurant"
+)}. Goodbye.
 </Say>
 
 <Pause length="1"/>
 <Hangup/>
+
 </Response>
 `;
 }
@@ -45,9 +57,15 @@ Thanks for calling. Goodbye.
 export function sayAndHangup(reply) {
   return `
 <Response>
-<Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
+
+<Say voice="Polly.Brian" language="en-GB">
+${escapeXml(reply)}
+</Say>
+
 <Pause length="1"/>
+
 <Hangup/>
+
 </Response>
 `;
 }
