@@ -1,5 +1,5 @@
 export function isEndingPhrase(text) {
-  const lower = text.toLowerCase().trim();
+  const lower = String(text || "").toLowerCase().trim();
 
   return [
     "bye",
@@ -23,12 +23,11 @@ export function isEndingPhrase(text) {
 }
 
 export function isAiGoodbye(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   return [
     "goodbye",
     "bye",
-    "have a wonderful",
     "have a great day",
     "have a lovely day",
     "have a nice day",
@@ -38,7 +37,7 @@ export function isAiGoodbye(text) {
 }
 
 export function wantsBooking(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   return [
     "book",
@@ -47,12 +46,20 @@ export function wantsBooking(text) {
     "reserve",
     "table",
     "space",
-    "availability"
+    "availability",
+    "available",
+    "do you have",
+    "have you got",
+    "is there room",
+    "is there space",
+    "can i come",
+    "fit us in",
+    "fit me in"
   ].some(p => lower.includes(p));
 }
 
 export function confirms(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   return [
     "yes",
@@ -68,21 +75,29 @@ export function confirms(text) {
     "book it",
     "put it down",
     "that works",
-    "sounds good"
+    "sounds good",
+    "all correct",
+    "that's correct",
+    "thats correct"
   ].some(p => lower.includes(p));
 }
 
 export function denies(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
-  return [
+  const denialPhrases = [
     "no",
     "nope",
     "nah",
     "not right",
     "wrong",
     "incorrect",
-    "no thank you",
-    "no thanks"
-  ].some(p => lower.includes(p));
+    "that's wrong",
+    "thats wrong",
+    "not correct",
+    "that's not right",
+    "thats not right"
+  ];
+
+  return denialPhrases.some(p => lower.includes(p));
 }
