@@ -36,7 +36,7 @@ Are you still there?
     method="POST"
     language="en-GB"
     speechModel="phone_call"
-    speechTimeout="auto"
+    speechTimeout="1"
     timeout="8"
     enhanced="true">
 </Gather>
