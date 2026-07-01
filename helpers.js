@@ -86,16 +86,50 @@ export function getTodayMinutes() {
   return now.getHours() * 60 + now.getMinutes();
 }
 
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
 export function formatDate(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
   const now = getLondonNow();
+
+  if (
+    lower.includes("day after tomorrow") ||
+    lower.includes("after tomorrow")
+  ) {
+    return formatDateForSheet(addDays(now, 2));
+  }
 
   if (lower.includes("today")) return formatDateForSheet(now);
 
   if (lower.includes("tomorrow")) {
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return formatDateForSheet(tomorrow);
+    return formatDateForSheet(addDays(now, 1));
+  }
+
+  const weekdays = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6
+  };
+
+  for (const [dayName, dayNumber] of Object.entries(weekdays)) {
+    if (lower.includes(dayName)) {
+      const todayNumber = now.getDay();
+      let daysAhead = dayNumber - todayNumber;
+
+      if (lower.includes("next") || daysAhead <= 0) {
+        daysAhead += 7;
+      }
+
+      return formatDateForSheet(addDays(now, daysAhead));
+    }
   }
 
   const months = [
@@ -132,8 +166,22 @@ export function formatDate(text) {
   return null;
 }
 
+function normalizeHour(hour) {
+  const n = Number(hour);
+  if (n < 1 || n > 12) return null;
+  return n;
+}
+
+function buildTime(hour, minute = "00", meridiem = "PM") {
+  const cleanHour = normalizeHour(hour);
+  if (!cleanHour) return null;
+
+  const cleanMinute = pad(Number(minute || 0));
+  return `${cleanHour}:${cleanMinute} ${meridiem.toUpperCase()}`;
+}
+
 export function extractTime(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   const wordNumbers = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
@@ -159,29 +207,54 @@ export function extractTime(text) {
     if (lower.includes(phrase)) return halfTimes[phrase];
   }
 
-  const explicitTime = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(pm|am)\b/i);
+  const explicitTime = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(pm|p\.m\.|am|a\.m\.)\b/i);
   if (explicitTime) {
-    return `${explicitTime[1]}:${explicitTime[2] || "00"} ${explicitTime[3].toUpperCase()}`;
+    const meridiem = explicitTime[3].toLowerCase().startsWith("a") ? "AM" : "PM";
+    return buildTime(explicitTime[1], explicitTime[2] || "00", meridiem);
+  }
+
+  for (const word in wordNumbers) {
+    const regex = new RegExp(`\\b${word}\\s*(pm|p\\.m\\.|am|a\\.m\\.)\\b`, "i");
+    const match = lower.match(regex);
+    if (match) {
+      const meridiem = match[1].toLowerCase().startsWith("a") ? "AM" : "PM";
+      return buildTime(wordNumbers[word], "00", meridiem);
+    }
   }
 
   const oclockNumber = lower.match(/\b(\d{1,2})\s*(o'clock|oclock|clock)\b/i);
   if (oclockNumber) {
-    return `${Number(oclockNumber[1])}:00 PM`;
+    return buildTime(oclockNumber[1], "00", "PM");
   }
 
   for (const word in wordNumbers) {
     const regex = new RegExp(`\\b${word}\\s*(o'clock|oclock|clock)\\b`, "i");
-    if (regex.test(lower)) return `${wordNumbers[word]}:00 PM`;
+    if (regex.test(lower)) return buildTime(wordNumbers[word], "00", "PM");
   }
 
   const casualTime = lower.match(/\b(?:for|at|around|about)\s+(\d{1,2})(?::(\d{2}))?\b/i);
   if (casualTime) {
-    return `${casualTime[1]}:${casualTime[2] || "00"} PM`;
+    return buildTime(casualTime[1], casualTime[2] || "00", "PM");
   }
 
-  if (state.bookingStep === "time" || state.bookingStep === "correction") {
+  for (const word in wordNumbers) {
+    const regex = new RegExp(`\\b(?:for|at|around|about)\\s+${word}\\b`, "i");
+    if (regex.test(lower)) return buildTime(wordNumbers[word], "00", "PM");
+  }
+
+  if (
+    state.bookingStep === "time" ||
+    state.bookingStep === "correction" ||
+    state.bookingStep === "correctTime"
+  ) {
     const bareNumber = lower.match(/\b(\d{1,2})\b/);
-    if (bareNumber) return `${bareNumber[1]}:00 PM`;
+    if (bareNumber) return buildTime(bareNumber[1], "00", "PM");
+
+    for (const word in wordNumbers) {
+      if (new RegExp(`\\b${word}\\b`, "i").test(lower)) {
+        return buildTime(wordNumbers[word], "00", "PM");
+      }
+    }
   }
 
   return null;
@@ -217,7 +290,7 @@ export function cleanName(raw) {
 }
 
 export function extractName(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   const strongPatterns = [
     /(?:my name is|the name is|name is|put it under|book it under|reservation under|under|call me|i am|i'm|im)\s+([a-zA-Z][a-zA-Z\s'-]{0,40})/i,
@@ -229,7 +302,11 @@ export function extractName(text) {
     if (match && match[1]) return cleanName(match[1]);
   }
 
-  if (state.bookingStep === "name" || state.bookingStep === "confirmName") {
+  if (
+    state.bookingStep === "name" ||
+    state.bookingStep === "confirmName" ||
+    state.bookingStep === "correctName"
+  ) {
     return cleanName(text);
   }
 
@@ -237,7 +314,7 @@ export function extractName(text) {
 }
 
 export function extractPeople(text) {
-  const lower = text.toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   const words = {
     one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
@@ -245,25 +322,29 @@ export function extractPeople(text) {
   };
 
   const peoplePhrase = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
-  if (peoplePhrase) return `${peoplePhrase[1]} people`;
+  if (peoplePhrase) return Number(peoplePhrase[1]);
 
   const explicitPeople = lower.match(/\b(\d+)\s*(people|persons|guests|of us)\b/);
-  if (explicitPeople) return `${explicitPeople[1]} people`;
+  if (explicitPeople) return Number(explicitPeople[1]);
 
-  if (state.bookingStep === "people" || state.bookingStep === "correction") {
+  if (
+    state.bookingStep === "people" ||
+    state.bookingStep === "correction" ||
+    state.bookingStep === "correctPeople"
+  ) {
     const bareNumber = lower.match(/\b(\d+)\b/);
-    if (bareNumber) return `${bareNumber[1]} people`;
+    if (bareNumber) return Number(bareNumber[1]);
 
     for (const word in words) {
       if (new RegExp(`\\b${word}\\b`, "i").test(lower)) {
-        return `${words[word]} people`;
+        return words[word];
       }
     }
   }
 
   for (const word in words) {
     const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
-    if (regex.test(lower)) return `${words[word]} people`;
+    if (regex.test(lower)) return words[word];
   }
 
   return null;
