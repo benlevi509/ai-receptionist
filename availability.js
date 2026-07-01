@@ -10,6 +10,13 @@ import {
   SLOT_MINUTES
 } from "./helpers.js";
 
+const OPENING_MINUTES = 9 * 60;
+const CLOSING_MINUTES = 23 * 60;
+
+function isWithinOpeningHours(minutes) {
+  return minutes >= OPENING_MINUTES && minutes <= CLOSING_MINUTES;
+}
+
 export async function isSlotTaken(date, time) {
   const bookings = await getExistingBookings();
   const requestedMinutes = parseTimeToMinutes(time);
@@ -34,11 +41,11 @@ export async function findNextAvailableSlot(date, requestedTime) {
     minutes = roundUpToNextSlot(getTodayMinutes() + 1);
   }
 
-  const latest = parseTimeToMinutes(
-    businessConfig.bookingSettings?.latestBookingTime || "10:00 PM"
-  ) || 22 * 60;
+  if (minutes < OPENING_MINUTES) {
+    minutes = OPENING_MINUTES;
+  }
 
-  while (minutes <= latest) {
+  while (minutes <= CLOSING_MINUTES) {
     const displayTime = formatDisplayTime(minutes);
     const taken = await isSlotTaken(date, displayTime);
 
@@ -57,6 +64,14 @@ export async function validateRequestedSlot(date, time) {
     return {
       ok: false,
       reason: "invalid",
+      suggestion: null
+    };
+  }
+
+  if (!isWithinOpeningHours(requestedMinutes)) {
+    return {
+      ok: false,
+      reason: "closed",
       suggestion: null
     };
   }
