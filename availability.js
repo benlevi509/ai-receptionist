@@ -1,5 +1,6 @@
 import businessConfig from "./businessConfig.js";
 import { getExistingBookings } from "./sheets.js";
+
 import {
   formatDateForSheet,
   formatDisplayTime,
@@ -14,23 +15,35 @@ const OPENING_MINUTES = 9 * 60;
 const CLOSING_MINUTES = 23 * 60;
 
 function isWithinOpeningHours(minutes) {
-  return minutes >= OPENING_MINUTES && minutes <= CLOSING_MINUTES;
+  return minutes >= OPENING_MINUTES && minutes < CLOSING_MINUTES;
 }
 
-export async function isSlotTaken(date, time) {
+function getMaxBookingsPerSlot() {
+  return businessConfig.bookingSettings?.maxBookingsPerSlot || 1;
+}
+
+export async function getSlotBookingCount(date, time) {
   const bookings = await getExistingBookings();
   const requestedMinutes = parseTimeToMinutes(time);
 
-  return bookings.some(b => {
+  if (requestedMinutes === null) return 0;
+
+  return bookings.filter(b => {
     if (b.date !== date) return false;
 
     const existingMinutes = parseTimeToMinutes(b.time);
     return existingMinutes === requestedMinutes;
-  });
+  }).length;
+}
+
+export async function isSlotTaken(date, time) {
+  const count = await getSlotBookingCount(date, time);
+  return count >= getMaxBookingsPerSlot();
 }
 
 export async function findNextAvailableSlot(date, requestedTime) {
   let minutes = parseTimeToMinutes(requestedTime);
+
   if (minutes === null) return null;
 
   minutes = roundUpToNextSlot(minutes);
@@ -45,7 +58,7 @@ export async function findNextAvailableSlot(date, requestedTime) {
     minutes = OPENING_MINUTES;
   }
 
-  while (minutes <= CLOSING_MINUTES) {
+  while (minutes < CLOSING_MINUTES) {
     const displayTime = formatDisplayTime(minutes);
     const taken = await isSlotTaken(date, displayTime);
 
@@ -72,7 +85,7 @@ export async function validateRequestedSlot(date, time) {
     return {
       ok: false,
       reason: "closed",
-      suggestion: null
+      suggestion: await findNextAvailableSlot(date, time)
     };
   }
 
