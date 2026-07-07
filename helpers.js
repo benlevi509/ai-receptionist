@@ -39,6 +39,18 @@ export function formatDateForSpeech(sheetDate) {
 
   const day = Number(match[1]);
   const monthIndex = Number(match[2]) - 1;
+  const year = Number(match[3]);
+
+  const dateObj = new Date(year, monthIndex, day);
+  const now = getLondonNow();
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+
+  const diffDays = Math.round((target - today) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "today";
+  if (diffDays === 1) return "tomorrow";
 
   const months = [
     "January", "February", "March", "April", "May", "June",
@@ -96,10 +108,7 @@ export function formatDate(text) {
   const lower = String(text || "").toLowerCase();
   const now = getLondonNow();
 
-  if (
-    lower.includes("day after tomorrow") ||
-    lower.includes("after tomorrow")
-  ) {
+  if (lower.includes("day after tomorrow") || lower.includes("after tomorrow")) {
     return formatDateForSheet(addDays(now, 2));
   }
 
@@ -184,8 +193,18 @@ export function extractTime(text) {
   const lower = String(text || "").toLowerCase();
 
   const wordNumbers = {
-    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
-    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12
   };
 
   const halfTimes = {
@@ -216,6 +235,7 @@ export function extractTime(text) {
   for (const word in wordNumbers) {
     const regex = new RegExp(`\\b${word}\\s*(pm|p\\.m\\.|am|a\\.m\\.)\\b`, "i");
     const match = lower.match(regex);
+
     if (match) {
       const meridiem = match[1].toLowerCase().startsWith("a") ? "AM" : "PM";
       return buildTime(wordNumbers[word], "00", meridiem);
@@ -238,14 +258,15 @@ export function extractTime(text) {
   }
 
   for (const word in wordNumbers) {
-    const regex = new RegExp(`\\b(?:for|at|around|about)\\s+${word}\\b`, "i");
+    const regex = new RegExp(`\\b(?:for|at|around|about)\s+${word}\\b`, "i");
     if (regex.test(lower)) return buildTime(wordNumbers[word], "00", "PM");
   }
 
   if (
     state.bookingStep === "time" ||
     state.bookingStep === "correction" ||
-    state.bookingStep === "correctTime"
+    state.bookingStep === "correctTime" ||
+    state.bookingStep === "availabilityTime"
   ) {
     const bareNumber = lower.match(/\b(\d{1,2})\b/);
     if (bareNumber) return buildTime(bareNumber[1], "00", "PM");
@@ -266,7 +287,7 @@ export function cleanName(raw) {
   let cleaned = String(raw).toLowerCase();
 
   cleaned = cleaned
-    .replace(/\b(um+|umm+|uh+|erm+|er+|ah+|like|basically|actually|please|thanks|thank you|mate|yeah|yes)\b/gi, " ")
+    .replace(/\b(um+|umm+|uh+|erm+|er+|ah+|like|basically|actually|please|thanks|thank you|mate|yeah|yes|no|okay|ok)\b/gi, " ")
     .replace(/\b(my name is|the name is|name is|the name|my name|put it under|book it under|reservation under|under|call me|i am|i'm|im|it's|its|it is)\b/gi, " ")
     .replace(/[^a-zA-Z\s'-]/g, " ")
     .replace(/\s+/g, " ")
@@ -274,7 +295,8 @@ export function cleanName(raw) {
 
   const banned = new Set([
     "reservation", "booking", "table", "people", "person", "guests",
-    "today", "tomorrow", "date", "time", "for", "at", "on", "is", "are"
+    "today", "tomorrow", "date", "time", "for", "at", "on", "is", "are",
+    "menu", "close", "closing", "open", "opening"
   ]);
 
   let words = cleaned
@@ -317,8 +339,18 @@ export function extractPeople(text) {
   const lower = String(text || "").toLowerCase();
 
   const words = {
-    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
-    seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12
   };
 
   const peoplePhrase = lower.match(/\b(?:for|table for|party of)\s+(\d+)\b/);
@@ -326,6 +358,11 @@ export function extractPeople(text) {
 
   const explicitPeople = lower.match(/\b(\d+)\s*(people|persons|guests|of us)\b/);
   if (explicitPeople) return Number(explicitPeople[1]);
+
+  for (const word in words) {
+    const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
+    if (regex.test(lower)) return words[word];
+  }
 
   if (
     state.bookingStep === "people" ||
@@ -340,11 +377,6 @@ export function extractPeople(text) {
         return words[word];
       }
     }
-  }
-
-  for (const word in words) {
-    const regex = new RegExp(`\\b(?:for|table for|party of)\\s+${word}\\b`, "i");
-    if (regex.test(lower)) return words[word];
   }
 
   return null;
