@@ -12,44 +12,40 @@ function escapeXml(text) {
 export function sayAndGather(reply) {
   return `
 <Response>
+  <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
 
-<Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
-
-<Gather
+  <Gather
     input="speech"
     action="/process-speech"
     method="POST"
     language="en-GB"
     speechModel="phone_call"
-    speechTimeout="1"
-    timeout="12"
     enhanced="true"
-    bargeIn="true">
-</Gather>
+    bargeIn="true"
+    timeout="18"
+    speechTimeout="auto">
+  </Gather>
 
-<Say voice="Polly.Brian" language="en-GB">Are you still there?</Say>
+  <Say voice="Polly.Brian" language="en-GB">Sorry, I didn&apos;t catch anything. Are you still there?</Say>
 
-<Gather
+  <Gather
     input="speech"
     action="/process-speech"
     method="POST"
     language="en-GB"
     speechModel="phone_call"
-    speechTimeout="1"
-    timeout="10"
     enhanced="true"
-    bargeIn="true">
-</Gather>
+    bargeIn="true"
+    timeout="14"
+    speechTimeout="auto">
+  </Gather>
 
-<Say voice="Polly.Brian" language="en-GB">
-I'll end the call now. Thank you for calling ${escapeXml(
-    businessConfig.businessName
-  )}. Goodbye.
-</Say>
+  <Say voice="Polly.Brian" language="en-GB">
+    I&apos;ll end the call for now. Thank you for calling ${escapeXml(businessConfig.businessName)}. Goodbye.
+  </Say>
 
-<Pause length="1"/>
-<Hangup/>
-
+  <Pause length="1"/>
+  <Hangup/>
 </Response>
 `;
 }
@@ -57,9 +53,9 @@ I'll end the call now. Thank you for calling ${escapeXml(
 export function sayAndHangup(reply) {
   return `
 <Response>
-<Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
-<Pause length="1"/>
-<Hangup/>
+  <Say voice="Polly.Brian" language="en-GB">${escapeXml(reply)}</Say>
+  <Pause length="1"/>
+  <Hangup/>
 </Response>
 `;
 }
