@@ -1,7 +1,18 @@
-export function isEndingPhrase(text) {
-  const lower = String(text || "").toLowerCase().trim();
+function normalise(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[.,!?]/g, "")
+    .trim();
+}
 
-  return [
+function includesAny(lower, phrases) {
+  return phrases.some(p => lower.includes(p));
+}
+
+export function isEndingPhrase(text) {
+  const lower = normalise(text);
+
+  return includesAny(lower, [
     "bye",
     "goodbye",
     "that's all",
@@ -18,28 +29,30 @@ export function isEndingPhrase(text) {
     "thats everything",
     "that's it",
     "thats it",
-    "thanks bye"
-  ].some(p => lower.includes(p));
+    "thanks bye",
+    "thank you bye",
+    "that's me done",
+    "thats me done",
+    "i'm done",
+    "im done"
+  ]);
 }
 
 export function isAiGoodbye(text) {
-  const lower = String(text || "").toLowerCase();
+  const lower = normalise(text);
 
-  return [
+  return includesAny(lower, [
     "goodbye",
     "bye",
-    "have a great day",
-    "have a lovely day",
-    "have a nice day",
     "thanks for calling",
     "thank you for calling"
-  ].some(p => lower.includes(p));
+  ]);
 }
 
 export function wantsBooking(text) {
-  const lower = String(text || "").toLowerCase();
+  const lower = normalise(text);
 
-  return [
+  return includesAny(lower, [
     "book",
     "booking",
     "reservation",
@@ -48,56 +61,94 @@ export function wantsBooking(text) {
     "space",
     "availability",
     "available",
+    "free",
     "do you have",
     "have you got",
+    "any tables",
     "is there room",
     "is there space",
     "can i come",
+    "can we come",
     "fit us in",
-    "fit me in"
-  ].some(p => lower.includes(p));
+    "fit me in",
+    "come in tonight",
+    "come in today",
+    "come in tomorrow"
+  ]);
 }
 
 export function confirms(text) {
-  const lower = String(text || "").toLowerCase();
+  const lower = normalise(text);
 
-  return [
+  if (includesAny(lower, [
+    "not right",
+    "not correct",
+    "wrong",
+    "incorrect",
+    "no"
+  ])) {
+    return false;
+  }
+
+  return includesAny(lower, [
     "yes",
     "yeah",
     "yep",
+    "yeh",
+    "yup",
     "correct",
+    "right",
     "that's right",
     "thats right",
     "that's fine",
     "thats fine",
+    "fine",
     "perfect",
     "go ahead",
     "book it",
     "put it down",
     "that works",
+    "works for me",
     "sounds good",
     "all correct",
     "that's correct",
-    "thats correct"
-  ].some(p => lower.includes(p));
+    "thats correct",
+    "please do",
+    "go for it",
+    "that's okay",
+    "thats okay",
+    "ok",
+    "okay"
+  ]);
 }
 
 export function denies(text) {
-  const lower = String(text || "").toLowerCase();
+  const lower = normalise(text);
 
-  const denialPhrases = [
+  if (includesAny(lower, [
+    "no problem",
+    "no worries",
+    "no thank you",
+    "no thanks"
+  ])) {
+    return false;
+  }
+
+  return includesAny(lower, [
     "no",
     "nope",
     "nah",
     "not right",
+    "not quite",
+    "not correct",
     "wrong",
     "incorrect",
     "that's wrong",
     "thats wrong",
-    "not correct",
     "that's not right",
-    "thats not right"
-  ];
-
-  return denialPhrases.some(p => lower.includes(p));
+    "thats not right",
+    "change it",
+    "that's not it",
+    "thats not it"
+  ]);
 }
