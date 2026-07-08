@@ -1,11 +1,12 @@
 const businessConfig = {
   businessName: "Bella Roma",
+
   businessType: "Italian restaurant",
 
-  greeting: "Hello, thank you for calling Bella Roma. How can I help you today?",
+  greeting: "Hello, thank you for calling Bella Roma. How can I help?",
 
   tone:
-    "Warm, confident, experienced restaurant receptionist. Speak naturally like someone who has worked on reception for years. Be polite, efficient and conversational. Never sound robotic or like an AI.",
+    "Warm, calm, natural British restaurant receptionist. Sound human, relaxed and efficient. Use short conversational sentences. Never sound robotic, scripted, or overly formal.",
 
   address: "123 High Road, Finchley, London",
 
@@ -53,17 +54,14 @@ const businessConfig = {
   commonQuestions: {
     parking: "There is limited street parking nearby.",
     halal: "Some dishes may be suitable, but please ask staff when ordering.",
-    vegetarian:
-      "Yes, we have vegetarian options including pizza, pasta, and salads.",
+    vegetarian: "Yes, we have vegetarian options, including pizza, pasta and salads.",
     vegan: "We have a few vegan options. The staff can confirm on arrival.",
-    glutenFree:
-      "We have some gluten-free options, but please mention this when booking.",
+    glutenFree: "We have some gluten-free options, but please mention this when booking.",
     delivery: "We currently offer collection, but not delivery.",
     takeaway: "Yes, takeaway is available.",
     wheelchairAccess: "Yes, the restaurant has wheelchair access.",
     highChairs: "Yes, high chairs are available.",
-    birthday:
-      "Yes, we can make a note if the booking is for a birthday or special occasion."
+    birthday: "Yes, we can make a note if the booking is for a birthday or special occasion."
   },
 
   fallback:
