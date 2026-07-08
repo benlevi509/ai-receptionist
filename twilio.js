@@ -22,11 +22,11 @@ export function sayAndGather(reply) {
     speechModel="phone_call"
     enhanced="true"
     bargeIn="true"
-    timeout="18"
+    timeout="8"
     speechTimeout="auto">
   </Gather>
 
-  <Say voice="Polly.Brian" language="en-GB">Sorry, I didn&apos;t catch anything. Are you still there?</Say>
+  <Say voice="Polly.Brian" language="en-GB">Take your time — are you still there?</Say>
 
   <Gather
     input="speech"
@@ -36,7 +36,7 @@ export function sayAndGather(reply) {
     speechModel="phone_call"
     enhanced="true"
     bargeIn="true"
-    timeout="14"
+    timeout="7"
     speechTimeout="auto">
   </Gather>
 
