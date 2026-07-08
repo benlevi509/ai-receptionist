@@ -5,8 +5,8 @@ function normalise(text) {
     .trim();
 }
 
-function includesAny(lower, phrases) {
-  return phrases.some(p => lower.includes(p));
+function includesAny(text, phrases) {
+  return phrases.some(phrase => text.includes(phrase));
 }
 
 export function isEndingPhrase(text) {
@@ -17,24 +17,18 @@ export function isEndingPhrase(text) {
     "goodbye",
     "that's all",
     "thats all",
+    "that's it",
+    "thats it",
     "nothing else",
     "no thanks",
     "no thank you",
-    "nope that's all",
-    "nope thats all",
-    "no that's it",
-    "no thats it",
-    "all good",
-    "that's everything",
-    "thats everything",
-    "that's it",
-    "thats it",
     "thanks bye",
     "thank you bye",
-    "that's me done",
-    "thats me done",
+    "all good",
     "i'm done",
-    "im done"
+    "im done",
+    "that's everything",
+    "thats everything"
   ]);
 }
 
@@ -58,20 +52,13 @@ export function wantsBooking(text) {
     "reservation",
     "reserve",
     "table",
-    "space",
     "availability",
     "available",
-    "free",
-    "do you have",
-    "have you got",
+    "space",
+    "free table",
     "any tables",
-    "is there room",
-    "is there space",
-    "can i come",
-    "can we come",
-    "fit us in",
-    "fit me in",
-    "come in tonight",
+    "have a table",
+    "book a table",
     "come in today",
     "come in tomorrow"
   ]);
@@ -84,8 +71,7 @@ export function confirms(text) {
     "not right",
     "not correct",
     "wrong",
-    "incorrect",
-    "no"
+    "incorrect"
   ])) {
     return false;
   }
@@ -96,29 +82,24 @@ export function confirms(text) {
     "yep",
     "yeh",
     "yup",
+    "ok",
+    "okay",
     "correct",
-    "right",
     "that's right",
     "thats right",
-    "that's fine",
-    "thats fine",
-    "fine",
-    "perfect",
-    "go ahead",
-    "book it",
-    "put it down",
-    "that works",
-    "works for me",
-    "sounds good",
-    "all correct",
     "that's correct",
     "thats correct",
+    "sounds good",
+    "that works",
+    "works for me",
+    "go ahead",
     "please do",
-    "go for it",
-    "that's okay",
-    "thats okay",
-    "ok",
-    "okay"
+    "book it",
+    "that's fine",
+    "thats fine",
+    "perfect",
+    "absolutely",
+    "sure"
   ]);
 }
 
@@ -127,9 +108,7 @@ export function denies(text) {
 
   if (includesAny(lower, [
     "no problem",
-    "no worries",
-    "no thank you",
-    "no thanks"
+    "no worries"
   ])) {
     return false;
   }
@@ -138,17 +117,15 @@ export function denies(text) {
     "no",
     "nope",
     "nah",
-    "not right",
-    "not quite",
-    "not correct",
     "wrong",
     "incorrect",
+    "not right",
+    "not correct",
+    "change it",
+    "change that",
     "that's wrong",
     "thats wrong",
     "that's not right",
-    "thats not right",
-    "change it",
-    "that's not it",
-    "thats not it"
+    "thats not right"
   ]);
 }
