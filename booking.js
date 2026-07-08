@@ -7,18 +7,36 @@ import {
   extractName,
   extractTime,
   formatDate,
-  formatDateForSpeech
+  formatDateForSpeech,
+  formatDateForSheet,
+  formatDisplayTime,
+  getLondonNow,
+  getTodayMinutes,
+  roundUpToNextSlot,
+  SLOT_MINUTES
 } from "./helpers.js";
 
 import { confirms, denies } from "./intents.js";
 
 const MAX_PEOPLE = 6;
+const OPENING_MINUTES = 9 * 60;
+const CLOSING_MINUTES = 23 * 60;
+
+function ensureBookingShape() {
+  if (!state.booking) state.booking = {};
+  state.booking.people ??= null;
+  state.booking.date ??= null;
+  state.booking.time ??= null;
+  state.booking.name ??= null;
+}
 
 function bookingSummaryQuestion() {
   return `Just to confirm, that's a table for ${state.booking.people} people ${formatDateForSpeech(state.booking.date)} at ${state.booking.time}, under ${state.booking.name}. Is that right?`;
 }
 
 function bookingSummaryStatement() {
+  ensureBookingShape();
+
   if (!state.booking.people || !state.booking.date || !state.booking.time || !state.booking.name) {
     return "I don't have the full booking details yet.";
   }
@@ -38,8 +56,12 @@ function isAvailabilityQuestion(speech) {
     lower.includes("any tables") ||
     lower.includes("have a table") ||
     lower.includes("got a table") ||
-    lower.includes("can i book") ||
-    lower.includes("can we book")
+    lower.includes("come in") ||
+    lower.includes("walk in") ||
+    lower.includes("fit us in") ||
+    lower.includes("fit me in") ||
+    lower.includes("tonight") ||
+    lower.includes("today")
   );
 }
 
@@ -66,20 +88,39 @@ function detectCorrectionTarget(speech) {
   return null;
 }
 
-async function handleAvailabilityQuestion(speech, date, time) {
-  const chosenDate = date || state.booking.date || null;
+async function getAvailableSlotsForDate(date) {
+  const today = formatDateForSheet(getLondonNow());
+  let minutes = OPENING_MINUTES;
 
-  if (!chosenDate) {
-    state.bookingActive = true;
-    state.bookingStep = "availabilityDate";
-    return "Sure, what day were you hoping to come in?";
+  if (date === today) {
+    minutes = Math.max(OPENING_MINUTES, roundUpToNextSlot(getTodayMinutes() + 1));
   }
+
+  const slots = [];
+
+  while (minutes < CLOSING_MINUTES && slots.length < 3) {
+    const displayTime = formatDisplayTime(minutes);
+    const validation = await validateRequestedSlot(date, displayTime);
+
+    if (validation.ok) slots.push(displayTime);
+
+    minutes += SLOT_MINUTES;
+  }
+
+  return slots;
+}
+
+async function handleAvailabilityQuestion(speech, date, time) {
+  ensureBookingShape();
+
+  const chosenDate = date || state.booking.date || formatDateForSheet(getLondonNow());
 
   if (!time) {
     state.booking.date = chosenDate;
     state.bookingActive = true;
     state.bookingStep = "availabilityTime";
-    return `Sure, what time were you looking for ${formatDateForSpeech(chosenDate)}?`;
+
+    return `Sure — what time were you hoping to come in ${formatDateForSpeech(chosenDate)}?`;
   }
 
   const validation = await validateRequestedSlot(chosenDate, time);
@@ -94,7 +135,7 @@ async function handleAvailabilityQuestion(speech, date, time) {
   }
 
   if (validation.reason === "closed") {
-    return `We're closed at ${time}. What other time would you like me to check?`;
+    return `We're closed at ${time}. We're open from 9 AM to 11 PM. What other time would you like me to check?`;
   }
 
   if (validation.suggestion) {
@@ -116,7 +157,7 @@ async function validateAndSetTime(time) {
     if (validation.reason === "closed") {
       return {
         ok: false,
-        reply: `We're closed at ${time}. What other time would you like?`
+        reply: `We're closed at ${time}. We're open from 9 AM to 11 PM. What other time would you like?`
       };
     }
 
@@ -124,30 +165,9 @@ async function validateAndSetTime(time) {
       state.pendingTime = validation.suggestion;
       state.bookingStep = "confirmSuggestedTime";
 
-      if (validation.reason === "past") {
-        return {
-          ok: false,
-          reply: `${time} has already passed. I can do ${validation.suggestion}. Would that work?`
-        };
-      }
-
-      if (validation.reason === "not_half_hour") {
-        return {
-          ok: false,
-          reply: `We take bookings every half hour. I can do ${validation.suggestion}. Would that work?`
-        };
-      }
-
-      if (validation.reason === "taken") {
-        return {
-          ok: false,
-          reply: `${time} isn't available. I can do ${validation.suggestion}. Would that work?`
-        };
-      }
-
       return {
         ok: false,
-        reply: `${validation.suggestion} is available. Would you like me to book that?`
+        reply: `${time} isn't available, but ${validation.suggestion} is. Would that work?`
       };
     }
 
@@ -161,7 +181,23 @@ async function validateAndSetTime(time) {
   return { ok: true };
 }
 
+function resetAfterBooking() {
+  state.booking = {
+    people: null,
+    date: null,
+    time: null,
+    name: null
+  };
+
+  state.bookingActive = false;
+  state.bookingStep = null;
+  state.pendingTime = null;
+  state.pendingName = null;
+}
+
 export async function handleBooking(speech) {
+  ensureBookingShape();
+
   const startingStep = state.bookingStep;
 
   const people = extractPeople(speech);
@@ -172,26 +208,16 @@ export async function handleBooking(speech) {
     return bookingSummaryStatement();
   }
 
-  if (isAvailabilityQuestion(speech) && startingStep !== "confirmDetails") {
-    return await handleAvailabilityQuestion(speech, date, time);
-  }
-
   if (people && people > MAX_PEOPLE) {
     return `Sorry, we can only take bookings up to ${MAX_PEOPLE} people.`;
   }
 
-  if (startingStep === "availabilityDate") {
-    if (!date) return "What day were you hoping to come in?";
-
-    state.booking.date = date;
-    state.bookingStep = "availabilityTime";
-
-    return `What time were you looking for ${formatDateForSpeech(date)}?`;
+  if (isAvailabilityQuestion(speech) && !state.booking.name && startingStep !== "confirmDetails") {
+    return await handleAvailabilityQuestion(speech, date, time);
   }
 
   if (startingStep === "availabilityTime") {
     if (!time) return "What time would you like me to check?";
-
     return await handleAvailabilityQuestion(speech, state.booking.date, time);
   }
 
@@ -207,7 +233,7 @@ export async function handleBooking(speech) {
 
     if (denies(speech)) {
       state.pendingTime = null;
-      state.bookingStep = "time";
+      state.bookingStep = "availabilityTime";
       return "No worries, what other time would you like me to check?";
     }
 
@@ -226,7 +252,7 @@ export async function handleBooking(speech) {
 
     if (denies(speech)) {
       state.pendingTime = null;
-      state.bookingStep = "time";
+      state.bookingStep = "availabilityTime";
       return "No problem, what other time would you like?";
     }
 
@@ -234,17 +260,17 @@ export async function handleBooking(speech) {
   }
 
   if (startingStep === "people") {
-    if (!people) return "Sorry, how many people is that for?";
+    if (!people) return "How many people is that for?";
 
     state.booking.people = people;
     state.bookingStep = state.booking.date ? "time" : "date";
 
     if (!state.booking.date) return "Sure, what day would you like to come in?";
-    if (!state.booking.time) return `And what time would you like ${formatDateForSpeech(state.booking.date)}?`;
+    return `And what time would you like ${formatDateForSpeech(state.booking.date)}?`;
   }
 
   if (startingStep === "date") {
-    if (!date) return "Sorry, what day was that for?";
+    if (!date) return "What day would you like to come in?";
 
     state.booking.date = date;
     state.bookingStep = "time";
@@ -253,7 +279,7 @@ export async function handleBooking(speech) {
   }
 
   if (startingStep === "time") {
-    if (!time) return "Sorry, what time would you like?";
+    if (!time) return "What time would you like?";
 
     const result = await validateAndSetTime(time);
     if (!result.ok) return result.reply;
@@ -265,7 +291,7 @@ export async function handleBooking(speech) {
   if (startingStep === "name") {
     const name = extractName(speech);
 
-    if (!name) return "Sorry, what name should I put it under?";
+    if (!name) return "What name should I put it under?";
 
     state.pendingName = name;
     state.bookingStep = "confirmName";
@@ -302,14 +328,13 @@ export async function handleBooking(speech) {
   if (startingStep === "confirmDetails") {
     if (confirms(speech)) {
       const completedBooking = { ...state.booking };
+      const saved = await saveBookingToSheet(completedBooking);
 
-      await saveBookingToSheet(completedBooking);
+      resetAfterBooking();
 
-      state.booking = {};
-      state.bookingActive = false;
-      state.bookingStep = null;
-      state.pendingTime = null;
-      state.pendingName = null;
+      if (!saved) {
+        return "I'm sorry, I couldn't save that booking properly. Please try again in a moment.";
+      }
 
       return "All set, your booking is confirmed. Anything else I can help with?";
     }
@@ -388,7 +413,7 @@ export async function handleBooking(speech) {
   if (startingStep === "correctDate") {
     const correctedDate = formatDate(speech);
 
-    if (!correctedDate) return "Sorry, what date should I change it to?";
+    if (!correctedDate) return "What date should I change it to?";
 
     state.booking.date = correctedDate;
     state.bookingStep = "confirmDetails";
@@ -399,7 +424,7 @@ export async function handleBooking(speech) {
   if (startingStep === "correctTime") {
     const correctedTime = extractTime(speech);
 
-    if (!correctedTime) return "Sorry, what time should I change it to?";
+    if (!correctedTime) return "What time should I change it to?";
 
     const result = await validateAndSetTime(correctedTime);
     if (!result.ok) return result.reply;
