@@ -58,7 +58,7 @@ export const realtimeTools = [
     parameters: {
       type: "object",
       properties: {
-        people: { type: ["integer", "string"], description: "Number of guests, e.g. 4 or four." },
+        people: { type: "integer", description: "Number of guests as an integer, for example 4." },
         date: { type: "string", description: "Final confirmed date." },
         time: { type: "string", description: "Final confirmed time." },
         name: { type: "string", description: "Final confirmed booking name." },
