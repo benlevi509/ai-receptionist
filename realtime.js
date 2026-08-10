@@ -36,7 +36,7 @@ function createSessionConfig() {
     output_modalities: ["audio"],
     tools: realtimeTools,
     tool_choice: "auto",
-    max_output_tokens: 220,
+    max_output_tokens: 160,
     truncation: {
       type: "retention_ratio",
       retention_ratio: 0.8
@@ -48,11 +48,11 @@ function createSessionConfig() {
         transcription: {
           model: "gpt-4o-mini-transcribe",
           language: "en",
-          prompt: `British English restaurant phone call for ${businessConfig.businessName}. Expect names, dates, times and table bookings.`
+          prompt: `British English restaurant phone call for ${businessConfig.businessName}. Expect names, dates, times, simple business questions and table bookings.`
         },
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "medium",
+          eagerness: "high",
           create_response: true,
           interrupt_response: true
         }
@@ -86,6 +86,7 @@ export function attachRealtimeBridge(server) {
     let sessionConfigured = false;
     let greetingStarted = false;
     let closed = false;
+    let pendingHangupMark = null;
 
     let currentAssistantItemId = null;
     let responseStartTimestampTwilio = null;
@@ -96,7 +97,8 @@ export function attachRealtimeBridge(server) {
     const context = {
       callerNumber: "",
       callSid: "",
-      savedBookings: new Map()
+      savedBookings: new Map(),
+      endCallRequested: false
     };
 
     const model = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
@@ -125,15 +127,11 @@ export function attachRealtimeBridge(server) {
     };
 
     const interruptAssistant = () => {
-      if (!streamSid) return;
+      if (!streamSid || context.endCallRequested) return;
 
       safeSend(twilioSocket, { event: "clear", streamSid });
 
-      if (
-        currentAssistantItemId &&
-        responseStartTimestampTwilio !== null &&
-        assistantAudioMsSent > 0
-      ) {
+      if (currentAssistantItemId && responseStartTimestampTwilio !== null && assistantAudioMsSent > 0) {
         const elapsed = Math.max(0, latestInboundTimestamp - responseStartTimestampTwilio);
         const audioEndMs = Math.max(0, Math.min(Math.floor(elapsed), Math.floor(assistantAudioMsSent)));
 
@@ -172,9 +170,24 @@ export function attachRealtimeBridge(server) {
         return;
       }
 
+      if (msg.event === "mark") {
+        const name = String(msg.mark?.name || "");
+        if (pendingHangupMark && name === pendingHangupMark) {
+          pendingHangupMark = null;
+          setTimeout(() => {
+            if (twilioSocket.readyState === WebSocket.OPEN) {
+              twilioSocket.close(1000, "Call completed");
+            }
+          }, 100);
+        }
+        return;
+      }
+
       if (msg.event === "media" && msg.media?.payload) {
         const timestamp = Number(msg.media.timestamp);
         if (Number.isFinite(timestamp)) latestInboundTimestamp = timestamp;
+
+        if (context.endCallRequested) return;
 
         if (!sessionConfigured || openaiSocket.readyState !== WebSocket.OPEN) {
           queuedAudio.push(msg.media.payload);
@@ -216,7 +229,7 @@ export function attachRealtimeBridge(server) {
         try {
           assistantAudioMsSent += Buffer.from(event.delta, "base64").length / 8;
         } catch {
-          // Invalid base64 will be rejected downstream; keep the call alive and let errors surface.
+          // Keep the call alive if malformed audio is ever returned.
         }
 
         safeSend(twilioSocket, {
@@ -228,10 +241,16 @@ export function attachRealtimeBridge(server) {
       }
 
       if (event.type === "response.output_audio.done" && streamSid) {
+        const markName = context.endCallRequested
+          ? `hangup-${event.response_id || Date.now()}`
+          : `assistant-${event.response_id || Date.now()}`;
+
+        if (context.endCallRequested) pendingHangupMark = markName;
+
         safeSend(twilioSocket, {
           event: "mark",
           streamSid,
-          mark: { name: `assistant-${event.response_id || Date.now()}` }
+          mark: { name: markName }
         });
         return;
       }
@@ -256,6 +275,10 @@ export function attachRealtimeBridge(server) {
           result = { ok: false, reason: "tool_error" };
         }
 
+        if (result?.action === "end_call") {
+          context.endCallRequested = true;
+        }
+
         safeSend(openaiSocket, {
           type: "conversation.item.create",
           item: {
@@ -268,7 +291,9 @@ export function attachRealtimeBridge(server) {
         safeSend(openaiSocket, {
           type: "response.create",
           response: {
-            instructions: "Continue naturally from the tool result. Do not repeat questions whose answers are already known."
+            instructions: context.endCallRequested
+              ? "Say one short friendly goodbye only. Do not ask anything else."
+              : "Continue naturally from the tool result. Give the direct answer first. Do not repeat questions whose answers are already known."
           }
         });
         return;
