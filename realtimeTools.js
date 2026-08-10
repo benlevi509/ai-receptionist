@@ -1,64 +1,94 @@
 import businessConfig from "./businessConfig.js";
 import { validateRequestedSlot } from "./availability.js";
 import { saveBookingToSheet } from "./sheets.js";
-import { extractTime, formatDate, formatDateForSpeech } from "./helpers.js";
+import { formatDateForSpeech } from "./helpers.js";
+import {
+  normaliseDate,
+  normaliseName,
+  normalisePeople,
+  normaliseTime
+} from "./normalizers.js";
 
-function normaliseDate(value) {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw)) return raw;
-  return formatDate(raw);
+const bookingLocks = new Map();
+
+function withBookingLock(key, operation) {
+  const previous = bookingLocks.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  bookingLocks.set(key, next);
+  return next.finally(() => {
+    if (bookingLocks.get(key) === next) bookingLocks.delete(key);
+  });
 }
 
-function normaliseTime(value) {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(raw)) {
-    const [clock, meridiem] = raw.split(/\s+/);
-    return `${clock} ${meridiem.toUpperCase()}`;
-  }
-  return extractTime(`at ${raw}`);
+function bookingFingerprint({ people, date, time, name }) {
+  return `${people}|${date}|${time}|${String(name).toLowerCase()}`;
+}
+
+function parseDateAndTime(args) {
+  const date = normaliseDate(args.date);
+  const parsedTime = normaliseTime(args.time);
+  return { date, ...parsedTime };
 }
 
 export const realtimeTools = [
   {
     type: "function",
     name: "check_availability",
-    description: "Check restaurant table availability before promising a time. Use whenever the caller asks whether a date/time is available or before confirming a booking.",
+    description: "Check a restaurant date and time before saying it is available. Accept natural British time wording. If the time is ambiguous between AM and PM, do not guess: ask the caller to clarify instead of calling this tool.",
     parameters: {
       type: "object",
       properties: {
-        date: { type: "string", description: "Requested date, preferably DD/MM/YYYY, or natural wording such as tomorrow or next Friday." },
-        time: { type: "string", description: "Requested time, for example 7 PM or 7:30 PM." }
+        date: {
+          type: "string",
+          description: "Requested date. DD/MM/YYYY is ideal, but natural wording such as today, tomorrow, tonight, this Friday or 18 August is accepted."
+        },
+        time: {
+          type: "string",
+          description: "Requested time. Natural wording is accepted, including 5 past 9, half nine, quarter to eight, 7:30 PM or 19:30."
+        }
       },
-      required: ["date", "time"]
+      required: ["date", "time"],
+      additionalProperties: false
     }
   },
   {
     type: "function",
     name: "create_booking",
-    description: "Save a restaurant booking only after the caller has clearly confirmed the final party size, date, time and name. This tool validates availability again before saving.",
+    description: "Create the booking only after the caller has clearly agreed to one final summary containing party size, date, time and name. The server validates everything again and prevents duplicate saves from repeated tool calls.",
     parameters: {
       type: "object",
       properties: {
-        people: { type: "integer", description: "Number of guests." },
-        date: { type: "string", description: "Final confirmed date, preferably DD/MM/YYYY, or natural wording." },
+        people: { type: ["integer", "string"], description: "Number of guests, e.g. 4 or four." },
+        date: { type: "string", description: "Final confirmed date." },
         time: { type: "string", description: "Final confirmed time." },
-        name: { type: "string", description: "Name for the booking." },
-        notes: { type: "string", description: "Optional short note such as birthday or accessibility request." }
+        name: { type: "string", description: "Final confirmed booking name." },
+        notes: { type: "string", description: "Optional short note such as birthday, high chair or accessibility request." }
       },
-      required: ["people", "date", "time", "name"]
+      required: ["people", "date", "time", "name"],
+      additionalProperties: false
     }
   }
 ];
 
 export async function runRealtimeTool(name, args = {}, context = {}) {
   if (name === "check_availability") {
-    const date = normaliseDate(args.date);
-    const time = normaliseTime(args.time);
+    const { date, time, ambiguous, candidate } = parseDateAndTime(args);
 
-    if (!date || !time) {
-      return { ok: false, reason: "invalid_date_or_time", message: "I need a clear date and time to check that." };
+    if (!date) {
+      return { ok: false, reason: "invalid_date", message: "The date was not clear enough to check." };
+    }
+
+    if (ambiguous) {
+      return {
+        ok: false,
+        reason: "ambiguous_time",
+        candidate: candidate || null,
+        message: "The clock time is understandable but AM or PM is unclear. Ask only that clarification."
+      };
+    }
+
+    if (!time) {
+      return { ok: false, reason: "invalid_time", message: "The time was not clear enough to check." };
     }
 
     const validation = await validateRequestedSlot(date, time);
@@ -85,54 +115,68 @@ export async function runRealtimeTool(name, args = {}, context = {}) {
 
   if (name === "create_booking") {
     const maxPeople = businessConfig.bookingSettings?.maximumPartySize || 6;
-    const people = Number(args.people);
-    const date = normaliseDate(args.date);
-    const time = normaliseTime(args.time);
-    const bookingName = String(args.name || "").trim();
+    const people = normalisePeople(args.people);
+    const { date, time, ambiguous, candidate } = parseDateAndTime(args);
+    const nameForBooking = normaliseName(args.name);
+    const notes = String(args.notes || "").trim().slice(0, 250);
 
     if (!Number.isInteger(people) || people < 1) {
       return { ok: false, reason: "invalid_party_size" };
     }
-
     if (people > maxPeople) {
       return { ok: false, reason: "party_too_large", maximumPartySize: maxPeople };
     }
+    if (!date) return { ok: false, reason: "invalid_date" };
+    if (ambiguous) return { ok: false, reason: "ambiguous_time", candidate: candidate || null };
+    if (!time) return { ok: false, reason: "invalid_time" };
+    if (!nameForBooking) return { ok: false, reason: "invalid_name" };
 
-    if (!date || !time || !bookingName) {
-      return { ok: false, reason: "missing_booking_details" };
+    const fingerprint = bookingFingerprint({ people, date, time, name: nameForBooking });
+    if (context.savedBookings?.has(fingerprint)) {
+      return context.savedBookings.get(fingerprint);
     }
 
-    const validation = await validateRequestedSlot(date, time);
-    if (!validation.ok) {
-      return {
-        ok: false,
-        reason: validation.reason || "unavailable",
-        suggestion: validation.suggestion || null
-      };
-    }
+    const lockKey = `${date}|${time}`;
+    return withBookingLock(lockKey, async () => {
+      if (context.savedBookings?.has(fingerprint)) {
+        return context.savedBookings.get(fingerprint);
+      }
 
-    const saved = await saveBookingToSheet({
-      people,
-      date,
-      time,
-      name: bookingName,
-      phone: context.callerNumber || "",
-      notes: String(args.notes || "").trim()
-    });
+      const validation = await validateRequestedSlot(date, time);
+      if (!validation.ok) {
+        return {
+          ok: false,
+          reason: validation.reason || "unavailable",
+          suggestion: validation.suggestion || null
+        };
+      }
 
-    if (!saved) return { ok: false, reason: "save_failed" };
-
-    return {
-      ok: true,
-      confirmed: true,
-      booking: {
+      const saved = await saveBookingToSheet({
         people,
         date,
-        spokenDate: formatDateForSpeech(date),
         time,
-        name: bookingName
-      }
-    };
+        name: nameForBooking,
+        phone: context.callerNumber || "",
+        notes
+      });
+
+      if (!saved) return { ok: false, reason: "save_failed" };
+
+      const result = {
+        ok: true,
+        confirmed: true,
+        booking: {
+          people,
+          date,
+          spokenDate: formatDateForSpeech(date),
+          time,
+          name: nameForBooking
+        }
+      };
+
+      context.savedBookings?.set(fingerprint, result);
+      return result;
+    });
   }
 
   return { ok: false, reason: "unknown_tool" };
