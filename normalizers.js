@@ -246,12 +246,31 @@ export function normaliseTime(value) {
 }
 
 export function normaliseName(value) {
-  const cleaned = String(value || "")
-    .replace(/\b(my name is|the name is|name is|put it under|book it under|under|call me)\b/gi, " ")
+  let cleaned = String(value || "")
+    .replace(/\b(my name is|the name is|name is|put it under|book it under|reservation under|under the name|under|call me|it's|it is|i'm|i am)\b/gi, " ")
+    .replace(/\b(can you|could you|would you|please|thanks|thank you|yeah|yes|yep|okay|ok|sure)\b/gi, " ")
     .replace(/[^a-zA-ZÀ-ÿ' -]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
   if (!cleaned || cleaned.length > 60) return null;
+
+  const words = cleaned.split(" ").filter(Boolean);
+  if (!words.length || words.length > 4) return null;
+
+  const banned = new Set([
+    "can", "you", "could", "would", "please", "book", "booking", "table", "reservation",
+    "name", "people", "person", "guests", "today", "tomorrow", "tonight", "time", "date",
+    "yes", "yeah", "yep", "okay", "ok", "sure", "thanks", "thank", "hello", "hi"
+  ]);
+
+  if (words.every(word => banned.has(word.toLowerCase()))) return null;
+  if (words.some(word => banned.has(word.toLowerCase()))) {
+    cleaned = words.filter(word => !banned.has(word.toLowerCase())).join(" ").trim();
+  }
+
+  if (!cleaned) return null;
+
   return cleaned
     .split(" ")
     .filter(Boolean)
