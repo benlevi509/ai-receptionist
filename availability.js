@@ -76,6 +76,11 @@ export async function findNextAvailableSlot(date, requestedTime) {
   return null;
 }
 
+export async function findAnyAvailableSlot(date) {
+  if (!date) return null;
+  return findNextAvailableSlot(date, formatDisplayTime(earliestMinutes()));
+}
+
 export async function validateRequestedSlot(date, time) {
   const requestedMinutes = parseTimeToMinutes(time);
   if (requestedMinutes === null) {
