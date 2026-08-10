@@ -9,7 +9,6 @@ function getGoogleCredentialsPath() {
   if (fs.existsSync("/etc/secrets/google-credentials.json")) {
     return "/etc/secrets/google-credentials.json";
   }
-
   return "google-credentials.json";
 }
 
@@ -18,7 +17,6 @@ async function getSheetsClient() {
     keyFile: getGoogleCredentialsPath(),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"]
   });
-
   return google.sheets({ version: "v4", auth });
 }
 
@@ -26,22 +24,23 @@ function cleanCell(value) {
   return String(value || "").trim();
 }
 
+function requireSheetId() {
+  const sheetId = String(process.env.GOOGLE_SHEET_ID || "").trim();
+  if (!sheetId) throw new Error("Missing GOOGLE_SHEET_ID environment variable.");
+  return sheetId;
+}
+
 export async function getExistingBookings() {
+  const spreadsheetId = requireSheetId();
+
   try {
-    if (!process.env.GOOGLE_SHEET_ID) {
-      console.error("Missing GOOGLE_SHEET_ID environment variable.");
-      return [];
-    }
-
     const sheets = await getSheetsClient();
-
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      spreadsheetId,
       range: SHEET_RANGE
     });
 
     const rows = response.data.values || [];
-
     return rows
       .slice(1)
       .filter(row => row && row.length)
@@ -57,26 +56,28 @@ export async function getExistingBookings() {
       .filter(booking => booking.date && booking.time);
   } catch (error) {
     console.error("Failed to read bookings from Google Sheets:", error.message || error);
-    return [];
+    throw new Error("Booking storage is temporarily unavailable.", { cause: error });
   }
 }
 
 export async function saveBookingToSheet(bookingData) {
+  let spreadsheetId;
   try {
-    if (!process.env.GOOGLE_SHEET_ID) {
-      console.error("Missing GOOGLE_SHEET_ID environment variable.");
-      return false;
-    }
+    spreadsheetId = requireSheetId();
+  } catch (error) {
+    console.error(error.message || error);
+    return false;
+  }
 
-    if (!bookingData?.date || !bookingData?.time || !bookingData?.people || !bookingData?.name) {
-      console.error("Incomplete booking data, not saving:", bookingData);
-      return false;
-    }
+  if (!bookingData?.date || !bookingData?.time || !bookingData?.people || !bookingData?.name) {
+    console.error("Incomplete booking data, not saving.");
+    return false;
+  }
 
+  try {
     const sheets = await getSheetsClient();
-
     await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      spreadsheetId,
       range: SHEET_RANGE,
       valueInputOption: "USER_ENTERED",
       requestBody: {
