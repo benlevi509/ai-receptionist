@@ -9,23 +9,33 @@ import { attachRealtimeBridge } from "./realtime.js";
 const app = express();
 app.set("trust proxy", true);
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: "100kb" }));
 
 app.get("/", (req, res) => {
   res.status(200).send(`${businessConfig.businessName} AI receptionist is live.`);
 });
 
-app.get("/health", (req, res) => res.status(200).send("OK"));
-
-app.post("/voice", (req, res) => {
-  const host = process.env.PUBLIC_HOST || req.get("host");
-  const callerNumber = String(req.body.From || "").trim();
-
-  res.type("text/xml");
-  res.send(mediaStreamResponse(host, callerNumber));
+app.get("/health", (req, res) => {
+  const ready = Boolean(process.env.OPENAI_API_KEY && process.env.GOOGLE_SHEET_ID);
+  res.status(ready ? 200 : 503).json({ ok: ready });
 });
 
-const PORT = process.env.PORT || 10000;
+app.post("/voice", (req, res) => {
+  try {
+    const host = process.env.PUBLIC_HOST || req.get("host");
+    const callerNumber = String(req.body.From || "").trim();
+    const callSid = String(req.body.CallSid || "").trim();
+
+    res.type("text/xml");
+    res.send(mediaStreamResponse(host, { callerNumber, callSid }));
+  } catch (error) {
+    console.error("Failed to start voice stream:", error.message || error);
+    res.type("text/xml");
+    res.status(500).send("<Response><Say>Sorry, the phone service is temporarily unavailable.</Say><Hangup/></Response>");
+  }
+});
+
+const PORT = Number(process.env.PORT) || 10000;
 const server = http.createServer(app);
 attachRealtimeBridge(server);
 
