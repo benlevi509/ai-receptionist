@@ -1,5 +1,5 @@
 import businessConfig from "./businessConfig.js";
-import { validateRequestedSlot } from "./availability.js";
+import { findAnyAvailableSlot, validateRequestedSlot } from "./availability.js";
 import { saveBookingToSheet } from "./sheets.js";
 import { formatDateForSpeech } from "./helpers.js";
 import {
@@ -31,6 +31,19 @@ function parseDateAndTime(args) {
 }
 
 export const realtimeTools = [
+  {
+    type: "function",
+    name: "check_day_availability",
+    description: "Use when the caller asks whether there is any space on a day but gives no time, for example 'do you have space today?'. Returns whether at least one future booking slot is available that day.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Requested day such as today, tomorrow, Friday or DD/MM/YYYY." }
+      },
+      required: ["date"],
+      additionalProperties: false
+    }
+  },
   {
     type: "function",
     name: "check_availability",
@@ -67,10 +80,38 @@ export const realtimeTools = [
       required: ["people", "date", "time", "name"],
       additionalProperties: false
     }
+  },
+  {
+    type: "function",
+    name: "end_call",
+    description: "Use immediately when the caller clearly says goodbye, thanks bye, that's all, nothing else, or otherwise clearly ends the conversation. The server will end the phone call after your brief goodbye is played.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
   }
 ];
 
 export async function runRealtimeTool(name, args = {}, context = {}) {
+  if (name === "end_call") {
+    return { ok: true, action: "end_call" };
+  }
+
+  if (name === "check_day_availability") {
+    const date = normaliseDate(args.date);
+    if (!date) return { ok: false, reason: "invalid_date" };
+
+    const firstAvailableTime = await findAnyAvailableSlot(date);
+    return {
+      ok: true,
+      available: Boolean(firstAvailableTime),
+      date,
+      spokenDate: formatDateForSpeech(date),
+      firstAvailableTime: firstAvailableTime || null
+    };
+  }
+
   if (name === "check_availability") {
     const { date, time, ambiguous, candidate } = parseDateAndTime(args);
 
@@ -120,27 +161,19 @@ export async function runRealtimeTool(name, args = {}, context = {}) {
     const nameForBooking = normaliseName(args.name);
     const notes = String(args.notes || "").trim().slice(0, 250);
 
-    if (!Number.isInteger(people) || people < 1) {
-      return { ok: false, reason: "invalid_party_size" };
-    }
-    if (people > maxPeople) {
-      return { ok: false, reason: "party_too_large", maximumPartySize: maxPeople };
-    }
+    if (!Number.isInteger(people) || people < 1) return { ok: false, reason: "invalid_party_size" };
+    if (people > maxPeople) return { ok: false, reason: "party_too_large", maximumPartySize: maxPeople };
     if (!date) return { ok: false, reason: "invalid_date" };
     if (ambiguous) return { ok: false, reason: "ambiguous_time", candidate: candidate || null };
     if (!time) return { ok: false, reason: "invalid_time" };
     if (!nameForBooking) return { ok: false, reason: "invalid_name" };
 
     const fingerprint = bookingFingerprint({ people, date, time, name: nameForBooking });
-    if (context.savedBookings?.has(fingerprint)) {
-      return context.savedBookings.get(fingerprint);
-    }
+    if (context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint);
 
     const lockKey = `${date}|${time}`;
     return withBookingLock(lockKey, async () => {
-      if (context.savedBookings?.has(fingerprint)) {
-        return context.savedBookings.get(fingerprint);
-      }
+      if (context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint);
 
       const validation = await validateRequestedSlot(date, time);
       if (!validation.ok) {
