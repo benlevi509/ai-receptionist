@@ -19,8 +19,10 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 
 app.post("/voice", (req, res) => {
   const host = process.env.PUBLIC_HOST || req.get("host");
+  const callerNumber = String(req.body.From || "").trim();
+
   res.type("text/xml");
-  res.send(mediaStreamResponse(host));
+  res.send(mediaStreamResponse(host, callerNumber));
 });
 
 const PORT = process.env.PORT || 10000;
