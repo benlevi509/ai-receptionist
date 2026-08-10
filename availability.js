@@ -1,70 +1,76 @@
 import businessConfig from "./businessConfig.js";
 import { getExistingBookings } from "./sheets.js";
-
 import {
   formatDateForSheet,
   formatDisplayTime,
   getLondonNow,
   getTodayMinutes,
-  parseTimeToMinutes,
-  roundUpToNextSlot,
-  SLOT_MINUTES
+  parseTimeToMinutes
 } from "./helpers.js";
 
-const OPENING_MINUTES = 9 * 60;
-const CLOSING_MINUTES = 23 * 60;
+function configuredMinutes(value, fallback) {
+  return parseTimeToMinutes(value) ?? fallback;
+}
 
-function isWithinOpeningHours(minutes) {
-  return minutes >= OPENING_MINUTES && minutes < CLOSING_MINUTES;
+function slotMinutes() {
+  const configured = Number(businessConfig.bookingSettings?.bookingIntervalMinutes);
+  return Number.isInteger(configured) && configured > 0 ? configured : 30;
+}
+
+function earliestMinutes() {
+  return configuredMinutes(businessConfig.bookingSettings?.earliestBookingTime, 9 * 60);
+}
+
+function latestMinutes() {
+  return configuredMinutes(businessConfig.bookingSettings?.latestBookingTime, 23 * 60);
+}
+
+function isWithinBookingHours(minutes) {
+  return minutes >= earliestMinutes() && minutes <= latestMinutes();
 }
 
 function getMaxBookingsPerSlot() {
-  return businessConfig.bookingSettings?.maxBookingsPerSlot || 1;
+  const value = Number(businessConfig.bookingSettings?.maxBookingsPerSlot);
+  return Number.isInteger(value) && value > 0 ? value : 1;
+}
+
+function roundToConfiguredSlot(minutes) {
+  const interval = slotMinutes();
+  return Math.ceil(minutes / interval) * interval;
 }
 
 export async function getSlotBookingCount(date, time) {
   const bookings = await getExistingBookings();
   const requestedMinutes = parseTimeToMinutes(time);
-
   if (requestedMinutes === null) return 0;
 
-  return bookings.filter(b => {
-    if (b.date !== date) return false;
-
-    const existingMinutes = parseTimeToMinutes(b.time);
-    return existingMinutes === requestedMinutes;
+  return bookings.filter(booking => {
+    if (booking.date !== date) return false;
+    return parseTimeToMinutes(booking.time) === requestedMinutes;
   }).length;
 }
 
 export async function isSlotTaken(date, time) {
-  const count = await getSlotBookingCount(date, time);
-  return count >= getMaxBookingsPerSlot();
+  return (await getSlotBookingCount(date, time)) >= getMaxBookingsPerSlot();
 }
 
 export async function findNextAvailableSlot(date, requestedTime) {
   let minutes = parseTimeToMinutes(requestedTime);
-
   if (minutes === null) return null;
 
-  minutes = roundUpToNextSlot(minutes);
-
+  minutes = roundToConfiguredSlot(minutes);
   const today = formatDateForSheet(getLondonNow());
 
   if (date === today && minutes <= getTodayMinutes()) {
-    minutes = roundUpToNextSlot(getTodayMinutes() + 1);
+    minutes = roundToConfiguredSlot(getTodayMinutes() + 1);
   }
 
-  if (minutes < OPENING_MINUTES) {
-    minutes = OPENING_MINUTES;
-  }
+  if (minutes < earliestMinutes()) minutes = earliestMinutes();
 
-  while (minutes < CLOSING_MINUTES) {
+  while (minutes <= latestMinutes()) {
     const displayTime = formatDisplayTime(minutes);
-    const taken = await isSlotTaken(date, displayTime);
-
-    if (!taken) return displayTime;
-
-    minutes += SLOT_MINUTES;
+    if (!(await isSlotTaken(date, displayTime))) return displayTime;
+    minutes += slotMinutes();
   }
 
   return null;
@@ -72,16 +78,11 @@ export async function findNextAvailableSlot(date, requestedTime) {
 
 export async function validateRequestedSlot(date, time) {
   const requestedMinutes = parseTimeToMinutes(time);
-
   if (requestedMinutes === null) {
-    return {
-      ok: false,
-      reason: "invalid",
-      suggestion: null
-    };
+    return { ok: false, reason: "invalid", suggestion: null };
   }
 
-  if (!isWithinOpeningHours(requestedMinutes)) {
+  if (!isWithinBookingHours(requestedMinutes)) {
     return {
       ok: false,
       reason: "closed",
@@ -89,16 +90,15 @@ export async function validateRequestedSlot(date, time) {
     };
   }
 
-  if (requestedMinutes % SLOT_MINUTES !== 0) {
+  if (requestedMinutes % slotMinutes() !== 0) {
     return {
       ok: false,
-      reason: "not_half_hour",
+      reason: "not_on_interval",
       suggestion: await findNextAvailableSlot(date, time)
     };
   }
 
   const today = formatDateForSheet(getLondonNow());
-
   if (date === today && requestedMinutes <= getTodayMinutes()) {
     return {
       ok: false,
@@ -107,9 +107,7 @@ export async function validateRequestedSlot(date, time) {
     };
   }
 
-  const taken = await isSlotTaken(date, time);
-
-  if (taken) {
+  if (await isSlotTaken(date, time)) {
     return {
       ok: false,
       reason: "taken",
@@ -117,9 +115,5 @@ export async function validateRequestedSlot(date, time) {
     };
   }
 
-  return {
-    ok: true,
-    reason: null,
-    suggestion: null
-  };
+  return { ok: true, reason: null, suggestion: null };
 }
