@@ -1,29 +1,18 @@
 export const restaurant = {
-  name: "Benji's Restaurant",
-
-  address: "London, United Kingdom",
-
-  cuisine: "Modern European",
-
+  name: "Piani Pizza",
+  address: "233 Nether Street, West Finchley, London N3 1NT",
+  cuisine: "Pizza restaurant and takeaway",
   openingHours: {
-    monday: "12:00 - 22:00",
-    tuesday: "12:00 - 22:00",
-    wednesday: "12:00 - 22:00",
-    thursday: "12:00 - 22:00",
-    friday: "12:00 - 23:00",
-    saturday: "12:00 - 23:00",
-    sunday: "12:00 - 21:00"
+    monday: "11:30 - 19:30",
+    tuesday: "11:30 - 19:30",
+    wednesday: "11:30 - 19:30",
+    thursday: "11:30 - 19:30",
+    friday: "11:30 - 20:00",
+    saturday: "11:30 - 19:00",
+    sunday: "Closed"
   },
-
-  booking: {
-    maxPartySize: 8,
-    slotDurationMinutes: 90,
-    maxBookingsPerSlot: 10
-  },
-
   contact: {
-    phone: "+447402767133",
-    email: "benjilevi77@gmail.com"
+    phone: "02080509616",
+    website: "https://www.pizza4us.co.uk/"
   }
-
 };
