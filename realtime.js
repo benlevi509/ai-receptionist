@@ -30,7 +30,7 @@ function createSessionConfig() {
     output_modalities: ["audio"],
     tools: realtimeTools,
     tool_choice: "auto",
-    max_output_tokens: 160,
+    max_output_tokens: 1200,
     truncation: { type: "retention_ratio", retention_ratio: 0.8 },
     audio: {
       input: {
