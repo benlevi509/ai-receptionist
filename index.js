@@ -20,6 +20,21 @@ app.get("/health", (req, res) => {
   res.status(ready ? 200 : 503).json({ ok: ready });
 });
 
+app.post("/stream-status", (req, res) => {
+  const event = String(req.body.StreamEvent || "unknown");
+  const error = String(req.body.StreamError || "").trim();
+  const callSid = String(req.body.CallSid || "").trim();
+  const streamSid = String(req.body.StreamSid || "").trim();
+
+  if (event === "stream-error" || error) {
+    console.error(`Twilio stream failure: event=${event} call=${callSid || "unknown"} stream=${streamSid || "unknown"} error=${error || "unspecified"}`);
+  } else {
+    console.log(`Twilio stream status: event=${event} call=${callSid || "unknown"} stream=${streamSid || "unknown"}`);
+  }
+
+  res.sendStatus(204);
+});
+
 app.post("/voice", (req, res) => {
   try {
     const host = process.env.PUBLIC_HOST || req.get("host");
