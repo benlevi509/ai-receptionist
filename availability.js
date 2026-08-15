@@ -8,25 +8,9 @@ import {
   parseTimeToMinutes
 } from "./helpers.js";
 
-function configuredMinutes(value, fallback) {
-  return parseTimeToMinutes(value) ?? fallback;
-}
-
 function slotMinutes() {
   const configured = Number(businessConfig.bookingSettings?.bookingIntervalMinutes);
   return Number.isInteger(configured) && configured > 0 ? configured : 30;
-}
-
-function earliestMinutes() {
-  return configuredMinutes(businessConfig.bookingSettings?.earliestBookingTime, 9 * 60);
-}
-
-function latestMinutes() {
-  return configuredMinutes(businessConfig.bookingSettings?.latestBookingTime, 23 * 60);
-}
-
-function isWithinBookingHours(minutes) {
-  return minutes >= earliestMinutes() && minutes <= latestMinutes();
 }
 
 function getMaxBookingsPerSlot() {
@@ -37,6 +21,81 @@ function getMaxBookingsPerSlot() {
 function roundToConfiguredSlot(minutes) {
   const interval = slotMinutes();
   return Math.ceil(minutes / interval) * interval;
+}
+
+function parseClockPart(hourText, minuteText, meridiemText) {
+  let hour = Number(hourText);
+  const minute = Number(minuteText || 0);
+  const meridiem = String(meridiemText || "").toLowerCase();
+
+  if (!Number.isInteger(hour) || hour < 1 || hour > 12) return null;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+
+  if (meridiem === "pm" && hour !== 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  return hour * 60 + minute;
+}
+
+function parseOpeningRange(value) {
+  const text = String(value || "").trim();
+  if (!text || /^closed$/i.test(text)) return null;
+
+  const match = text.match(
+    /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i
+  );
+  if (!match) return null;
+
+  const open = parseClockPart(match[1], match[2], match[3]);
+  const close = parseClockPart(match[4], match[5], match[6]);
+  if (open === null || close === null || close <= open) return null;
+
+  return { open, close };
+}
+
+function bookingWindowForDate(date) {
+  const match = String(date || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const year = Number(match[3]);
+  const dateObj = new Date(year, month, day);
+
+  if (
+    dateObj.getFullYear() !== year ||
+    dateObj.getMonth() !== month ||
+    dateObj.getDate() !== day
+  ) {
+    return null;
+  }
+
+  const weekdayNames = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+
+  const weekday = weekdayNames[dateObj.getDay()];
+  const openingRange = parseOpeningRange(businessConfig.openingHours?.[weekday]);
+  if (!openingRange) return null;
+
+  // Optional booking-specific limits may make the bookable window narrower,
+  // but never wider than the restaurant's real opening hours.
+  const configuredEarliest = parseTimeToMinutes(businessConfig.bookingSettings?.earliestBookingTime);
+  const configuredLatest = parseTimeToMinutes(businessConfig.bookingSettings?.latestBookingTime);
+
+  return {
+    open: configuredEarliest === null
+      ? openingRange.open
+      : Math.max(openingRange.open, configuredEarliest),
+    close: configuredLatest === null
+      ? openingRange.close
+      : Math.min(openingRange.close, configuredLatest)
+  };
 }
 
 function countBookingsForSlot(bookings, date, requestedMinutes) {
@@ -62,6 +121,9 @@ export async function findNextAvailableSlot(date, requestedTime, existingBooking
   let minutes = parseTimeToMinutes(requestedTime);
   if (minutes === null) return null;
 
+  const window = bookingWindowForDate(date);
+  if (!window || window.close <= window.open) return null;
+
   minutes = roundToConfiguredSlot(minutes);
   const today = formatDateForSheet(getLondonNow());
 
@@ -69,14 +131,11 @@ export async function findNextAvailableSlot(date, requestedTime, existingBooking
     minutes = roundToConfiguredSlot(getTodayMinutes() + 1);
   }
 
-  if (minutes < earliestMinutes()) minutes = earliestMinutes();
+  if (minutes < window.open) minutes = roundToConfiguredSlot(window.open);
 
-  // Fetch the sheet once for the entire search. The old implementation fetched
-  // the full sheet once per candidate slot, which caused avoidable multi-second
-  // delays and could hit Google API rate limits.
   const bookings = existingBookings || await getExistingBookings();
 
-  while (minutes <= latestMinutes()) {
+  while (minutes < window.close) {
     const count = countBookingsForSlot(bookings, date, minutes);
     if (count < getMaxBookingsPerSlot()) return formatDisplayTime(minutes);
     minutes += slotMinutes();
@@ -87,8 +146,12 @@ export async function findNextAvailableSlot(date, requestedTime, existingBooking
 
 export async function findAnyAvailableSlot(date) {
   if (!date) return null;
+
+  const window = bookingWindowForDate(date);
+  if (!window) return null;
+
   const bookings = await getExistingBookings();
-  return findNextAvailableSlot(date, formatDisplayTime(earliestMinutes()), bookings);
+  return findNextAvailableSlot(date, formatDisplayTime(window.open), bookings);
 }
 
 export async function validateRequestedSlot(date, time) {
@@ -97,13 +160,18 @@ export async function validateRequestedSlot(date, time) {
     return { ok: false, reason: "invalid", suggestion: null };
   }
 
-  if (!isWithinBookingHours(requestedMinutes)) {
-    const bookings = await getExistingBookings();
-    return {
-      ok: false,
-      reason: "closed",
-      suggestion: await findNextAvailableSlot(date, time, bookings)
-    };
+  const window = bookingWindowForDate(date);
+  if (!window) {
+    return { ok: false, reason: "closed", suggestion: null };
+  }
+
+  if (requestedMinutes < window.open || requestedMinutes >= window.close) {
+    let suggestion = null;
+    if (requestedMinutes < window.open) {
+      const bookings = await getExistingBookings();
+      suggestion = await findNextAvailableSlot(date, formatDisplayTime(window.open), bookings);
+    }
+    return { ok: false, reason: "closed", suggestion };
   }
 
   if (requestedMinutes % slotMinutes() !== 0) {
