@@ -15,13 +15,20 @@ export function mediaStreamResponse(host, { callerNumber = "", callSid = "" } = 
 
   if (!cleanHost) throw new Error("Cannot create Twilio media stream without a public host.");
 
+  const statusUrl = `https://${cleanHost}/stream-status`;
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="wss://${escapeXml(cleanHost)}/media-stream">
+    <Stream
+      url="wss://${escapeXml(cleanHost)}/media-stream"
+      statusCallback="${escapeXml(statusUrl)}"
+      statusCallbackMethod="POST">
       <Parameter name="callerNumber" value="${escapeXml(callerNumber)}" />
       <Parameter name="callSid" value="${escapeXml(callSid)}" />
     </Stream>
   </Connect>
+  <Say voice="Polly.Brian" language="en-GB">The phone connection dropped. Please call again in a moment.</Say>
+  <Hangup/>
 </Response>`;
 }
