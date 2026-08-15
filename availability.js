@@ -39,22 +39,26 @@ function roundToConfiguredSlot(minutes) {
   return Math.ceil(minutes / interval) * interval;
 }
 
-export async function getSlotBookingCount(date, time) {
-  const bookings = await getExistingBookings();
-  const requestedMinutes = parseTimeToMinutes(time);
-  if (requestedMinutes === null) return 0;
-
+function countBookingsForSlot(bookings, date, requestedMinutes) {
   return bookings.filter(booking => {
     if (booking.date !== date) return false;
     return parseTimeToMinutes(booking.time) === requestedMinutes;
   }).length;
 }
 
-export async function isSlotTaken(date, time) {
-  return (await getSlotBookingCount(date, time)) >= getMaxBookingsPerSlot();
+export async function getSlotBookingCount(date, time, existingBookings = null) {
+  const requestedMinutes = parseTimeToMinutes(time);
+  if (requestedMinutes === null) return 0;
+
+  const bookings = existingBookings || await getExistingBookings();
+  return countBookingsForSlot(bookings, date, requestedMinutes);
 }
 
-export async function findNextAvailableSlot(date, requestedTime) {
+export async function isSlotTaken(date, time, existingBookings = null) {
+  return (await getSlotBookingCount(date, time, existingBookings)) >= getMaxBookingsPerSlot();
+}
+
+export async function findNextAvailableSlot(date, requestedTime, existingBookings = null) {
   let minutes = parseTimeToMinutes(requestedTime);
   if (minutes === null) return null;
 
@@ -67,9 +71,14 @@ export async function findNextAvailableSlot(date, requestedTime) {
 
   if (minutes < earliestMinutes()) minutes = earliestMinutes();
 
+  // Fetch the sheet once for the entire search. The old implementation fetched
+  // the full sheet once per candidate slot, which caused avoidable multi-second
+  // delays and could hit Google API rate limits.
+  const bookings = existingBookings || await getExistingBookings();
+
   while (minutes <= latestMinutes()) {
-    const displayTime = formatDisplayTime(minutes);
-    if (!(await isSlotTaken(date, displayTime))) return displayTime;
+    const count = countBookingsForSlot(bookings, date, minutes);
+    if (count < getMaxBookingsPerSlot()) return formatDisplayTime(minutes);
     minutes += slotMinutes();
   }
 
@@ -78,7 +87,8 @@ export async function findNextAvailableSlot(date, requestedTime) {
 
 export async function findAnyAvailableSlot(date) {
   if (!date) return null;
-  return findNextAvailableSlot(date, formatDisplayTime(earliestMinutes()));
+  const bookings = await getExistingBookings();
+  return findNextAvailableSlot(date, formatDisplayTime(earliestMinutes()), bookings);
 }
 
 export async function validateRequestedSlot(date, time) {
@@ -88,35 +98,39 @@ export async function validateRequestedSlot(date, time) {
   }
 
   if (!isWithinBookingHours(requestedMinutes)) {
+    const bookings = await getExistingBookings();
     return {
       ok: false,
       reason: "closed",
-      suggestion: await findNextAvailableSlot(date, time)
+      suggestion: await findNextAvailableSlot(date, time, bookings)
     };
   }
 
   if (requestedMinutes % slotMinutes() !== 0) {
+    const bookings = await getExistingBookings();
     return {
       ok: false,
       reason: "not_on_interval",
-      suggestion: await findNextAvailableSlot(date, time)
+      suggestion: await findNextAvailableSlot(date, time, bookings)
     };
   }
 
   const today = formatDateForSheet(getLondonNow());
   if (date === today && requestedMinutes <= getTodayMinutes()) {
+    const bookings = await getExistingBookings();
     return {
       ok: false,
       reason: "past",
-      suggestion: await findNextAvailableSlot(date, time)
+      suggestion: await findNextAvailableSlot(date, time, bookings)
     };
   }
 
-  if (await isSlotTaken(date, time)) {
+  const bookings = await getExistingBookings();
+  if (countBookingsForSlot(bookings, date, requestedMinutes) >= getMaxBookingsPerSlot()) {
     return {
       ok: false,
       reason: "taken",
-      suggestion: await findNextAvailableSlot(date, time)
+      suggestion: await findNextAvailableSlot(date, time, bookings)
     };
   }
 
