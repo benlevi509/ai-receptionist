@@ -4,6 +4,8 @@ import fs from "fs";
 import { TIME_ZONE } from "./helpers.js";
 
 const SHEET_RANGE = "Sheet1!A:G";
+const GOOGLE_REQUEST_TIMEOUT_MS = 6000;
+let sheetsClientPromise = null;
 
 function getGoogleCredentialsPath() {
   if (fs.existsSync("/etc/secrets/google-credentials.json")) {
@@ -13,11 +15,23 @@ function getGoogleCredentialsPath() {
 }
 
 async function getSheetsClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: getGoogleCredentialsPath(),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-  });
-  return google.sheets({ version: "v4", auth });
+  if (!sheetsClientPromise) {
+    sheetsClientPromise = (async () => {
+      const auth = new google.auth.GoogleAuth({
+        keyFile: getGoogleCredentialsPath(),
+        scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+      });
+      return google.sheets({ version: "v4", auth });
+    })();
+  }
+
+  try {
+    return await sheetsClientPromise;
+  } catch (error) {
+    // Do not permanently cache a failed initialisation.
+    sheetsClientPromise = null;
+    throw error;
+  }
 }
 
 function cleanCell(value) {
@@ -35,10 +49,13 @@ export async function getExistingBookings() {
 
   try {
     const sheets = await getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: SHEET_RANGE
-    });
+    const response = await sheets.spreadsheets.values.get(
+      {
+        spreadsheetId,
+        range: SHEET_RANGE
+      },
+      { timeout: GOOGLE_REQUEST_TIMEOUT_MS }
+    );
 
     const rows = response.data.values || [];
     return rows
@@ -76,22 +93,25 @@ export async function saveBookingToSheet(bookingData) {
 
   try {
     const sheets = await getSheetsClient();
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: SHEET_RANGE,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[
-          new Date().toLocaleString("en-GB", { timeZone: TIME_ZONE }),
-          bookingData.name,
-          bookingData.people,
-          bookingData.date,
-          bookingData.time,
-          bookingData.phone || "",
-          bookingData.notes || ""
-        ]]
-      }
-    });
+    await sheets.spreadsheets.values.append(
+      {
+        spreadsheetId,
+        range: SHEET_RANGE,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[
+            new Date().toLocaleString("en-GB", { timeZone: TIME_ZONE }),
+            bookingData.name,
+            bookingData.people,
+            bookingData.date,
+            bookingData.time,
+            bookingData.phone || "",
+            bookingData.notes || ""
+          ]]
+        }
+      },
+      { timeout: GOOGLE_REQUEST_TIMEOUT_MS }
+    );
 
     console.log("Booking saved to Google Sheets.");
     return true;
