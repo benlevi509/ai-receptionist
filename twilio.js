@@ -13,7 +13,9 @@ export function mediaStreamResponse(host, { callerNumber = "", callSid = "" } = 
     .replace(/^wss?:\/\//i, "")
     .replace(/\/$/, "");
 
-  if (!cleanHost) throw new Error("Cannot create Twilio media stream without a public host.");
+  if (!cleanHost) {
+    throw new Error("Cannot create Twilio media stream without a public host.");
+  }
 
   const statusUrl = `https://${cleanHost}/stream-status`;
 
@@ -28,7 +30,6 @@ export function mediaStreamResponse(host, { callerNumber = "", callSid = "" } = 
       <Parameter name="callSid" value="${escapeXml(callSid)}" />
     </Stream>
   </Connect>
-  <Say voice="Polly.Brian" language="en-GB">The phone connection dropped. Please call again in a moment.</Say>
   <Hangup/>
 </Response>`;
 }
