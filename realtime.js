@@ -43,7 +43,7 @@ function createSessionConfig() {
         },
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "low",
+          eagerness: "medium",
           create_response: true,
           interrupt_response: false
         }
