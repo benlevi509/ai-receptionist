@@ -13,20 +13,14 @@ function safeSend(socket, payload) {
 }
 
 function parseJson(raw) {
-  try {
-    return JSON.parse(raw.toString());
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(raw.toString()); } catch { return null; }
 }
 
 function parseArguments(raw) {
   try {
     const parsed = JSON.parse(raw || "{}");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 function createSessionConfig() {
@@ -37,10 +31,7 @@ function createSessionConfig() {
     tools: realtimeTools,
     tool_choice: "auto",
     max_output_tokens: 160,
-    truncation: {
-      type: "retention_ratio",
-      retention_ratio: 0.8
-    },
+    truncation: { type: "retention_ratio", retention_ratio: 0.8 },
     audio: {
       input: {
         format: { type: "audio/pcmu" },
@@ -52,9 +43,9 @@ function createSessionConfig() {
         },
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "medium",
+          eagerness: "low",
           create_response: true,
-          interrupt_response: true
+          interrupt_response: false
         }
       },
       output: {
@@ -67,12 +58,7 @@ function createSessionConfig() {
 }
 
 export function attachRealtimeBridge(server) {
-  const wss = new WebSocketServer({
-    server,
-    path: "/media-stream",
-    perMessageDeflate: false,
-    maxPayload: 2 * 1024 * 1024
-  });
+  const wss = new WebSocketServer({ server, path: "/media-stream", perMessageDeflate: false, maxPayload: 2 * 1024 * 1024 });
 
   wss.on("connection", twilioSocket => {
     if (!process.env.OPENAI_API_KEY) {
@@ -82,79 +68,37 @@ export function attachRealtimeBridge(server) {
     }
 
     let streamSid = null;
-    let latestInboundTimestamp = 0;
     let sessionConfigured = false;
     let greetingStarted = false;
     let closed = false;
     let pendingHangupMark = null;
-
-    let currentAssistantItemId = null;
-    let responseStartTimestampTwilio = null;
-    let assistantAudioMsSent = 0;
-
     const queuedAudio = [];
     const processedToolCalls = new Set();
-    const context = {
-      callerNumber: "",
-      callSid: "",
-      savedBookings: new Map(),
-      endCallRequested: false
-    };
+    const context = { callerNumber: "", callSid: "", savedBookings: new Map(), endCallRequested: false };
 
     const model = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
-    const openaiSocket = new WebSocket(
-      `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
-      { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-    );
+    const openaiSocket = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+    });
 
     const maybeStartGreeting = () => {
       if (!sessionConfigured || !streamSid || greetingStarted) return;
       greetingStarted = true;
       safeSend(openaiSocket, {
         type: "response.create",
-        response: {
-          instructions: `Give one warm, brief phone greeting. Preserve the meaning of: ${businessConfig.greeting}. Then stop and listen.`
-        }
+        response: { instructions: `Give one warm, brief phone greeting. Preserve the meaning of: ${businessConfig.greeting}. Then stop and listen.` }
       });
     };
 
     const flushQueuedAudio = () => {
       if (!sessionConfigured || openaiSocket.readyState !== WebSocket.OPEN) return;
       while (queuedAudio.length) {
-        const audio = queuedAudio.shift();
-        safeSend(openaiSocket, { type: "input_audio_buffer.append", audio });
+        safeSend(openaiSocket, { type: "input_audio_buffer.append", audio: queuedAudio.shift() });
       }
-    };
-
-    const interruptAssistant = () => {
-      if (!streamSid || context.endCallRequested) return;
-
-      safeSend(twilioSocket, { event: "clear", streamSid });
-
-      if (currentAssistantItemId && responseStartTimestampTwilio !== null && assistantAudioMsSent > 0) {
-        const elapsed = Math.max(0, latestInboundTimestamp - responseStartTimestampTwilio);
-        const audioEndMs = Math.max(0, Math.min(Math.floor(elapsed), Math.floor(assistantAudioMsSent)));
-
-        if (audioEndMs > 0) {
-          safeSend(openaiSocket, {
-            type: "conversation.item.truncate",
-            item_id: currentAssistantItemId,
-            content_index: 0,
-            audio_end_ms: audioEndMs
-          });
-        }
-      }
-
-      currentAssistantItemId = null;
-      responseStartTimestampTwilio = null;
-      assistantAudioMsSent = 0;
     };
 
     openaiSocket.on("open", () => {
-      safeSend(openaiSocket, {
-        type: "session.update",
-        session: createSessionConfig()
-      });
+      safeSend(openaiSocket, { type: "session.update", session: createSessionConfig() });
     });
 
     twilioSocket.on("message", raw => {
@@ -166,6 +110,7 @@ export function attachRealtimeBridge(server) {
         const params = msg.start?.customParameters || {};
         context.callerNumber = String(params.callerNumber || "").trim();
         context.callSid = String(params.callSid || msg.start?.callSid || "").trim();
+        console.log(`Media stream started: call=${context.callSid || "unknown"} stream=${streamSid || "unknown"}`);
         maybeStartGreeting();
         return;
       }
@@ -175,33 +120,25 @@ export function attachRealtimeBridge(server) {
         if (pendingHangupMark && name === pendingHangupMark) {
           pendingHangupMark = null;
           setTimeout(() => {
-            if (twilioSocket.readyState === WebSocket.OPEN) {
-              twilioSocket.close(1000, "Call completed");
-            }
+            if (twilioSocket.readyState === WebSocket.OPEN) twilioSocket.close(1000, "Call completed");
           }, 100);
         }
         return;
       }
 
       if (msg.event === "media" && msg.media?.payload) {
-        const timestamp = Number(msg.media.timestamp);
-        if (Number.isFinite(timestamp)) latestInboundTimestamp = timestamp;
-
         if (context.endCallRequested) return;
-
         if (!sessionConfigured || openaiSocket.readyState !== WebSocket.OPEN) {
           queuedAudio.push(msg.media.payload);
           if (queuedAudio.length > MAX_QUEUED_AUDIO_FRAMES) queuedAudio.shift();
         } else {
-          safeSend(openaiSocket, {
-            type: "input_audio_buffer.append",
-            audio: msg.media.payload
-          });
+          safeSend(openaiSocket, { type: "input_audio_buffer.append", audio: msg.media.payload });
         }
         return;
       }
 
       if (msg.event === "stop") {
+        console.log(`Media stream stopped: call=${context.callSid || "unknown"} stream=${streamSid || "unknown"}`);
         if (openaiSocket.readyState === WebSocket.OPEN || openaiSocket.readyState === WebSocket.CONNECTING) {
           openaiSocket.close(1000, "Twilio stream stopped");
         }
@@ -220,43 +157,14 @@ export function attachRealtimeBridge(server) {
       }
 
       if (event.type === "response.output_audio.delta" && event.delta && streamSid) {
-        if (currentAssistantItemId !== event.item_id) {
-          currentAssistantItemId = event.item_id || null;
-          responseStartTimestampTwilio = latestInboundTimestamp;
-          assistantAudioMsSent = 0;
-        }
-
-        try {
-          assistantAudioMsSent += Buffer.from(event.delta, "base64").length / 8;
-        } catch {
-          // Keep the call alive if malformed audio is ever returned.
-        }
-
-        safeSend(twilioSocket, {
-          event: "media",
-          streamSid,
-          media: { payload: event.delta }
-        });
+        safeSend(twilioSocket, { event: "media", streamSid, media: { payload: event.delta } });
         return;
       }
 
       if (event.type === "response.output_audio.done" && streamSid) {
-        const markName = context.endCallRequested
-          ? `hangup-${event.response_id || Date.now()}`
-          : `assistant-${event.response_id || Date.now()}`;
-
+        const markName = context.endCallRequested ? `hangup-${event.response_id || Date.now()}` : `assistant-${event.response_id || Date.now()}`;
         if (context.endCallRequested) pendingHangupMark = markName;
-
-        safeSend(twilioSocket, {
-          event: "mark",
-          streamSid,
-          mark: { name: markName }
-        });
-        return;
-      }
-
-      if (event.type === "input_audio_buffer.speech_started") {
-        interruptAssistant();
+        safeSend(twilioSocket, { event: "mark", streamSid, mark: { name: markName } });
         return;
       }
 
@@ -264,30 +172,19 @@ export function attachRealtimeBridge(server) {
         const callId = String(event.call_id || "");
         if (!callId || processedToolCalls.has(callId)) return;
         processedToolCalls.add(callId);
-
         const args = parseArguments(event.arguments);
         let result;
-
         try {
           result = await runRealtimeTool(event.name, args, context);
         } catch (error) {
           console.error(`Realtime tool ${event.name} failed:`, error.message || error);
           result = { ok: false, reason: "tool_error" };
         }
-
-        if (result?.action === "end_call") {
-          context.endCallRequested = true;
-        }
-
+        if (result?.action === "end_call") context.endCallRequested = true;
         safeSend(openaiSocket, {
           type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(result)
-          }
+          item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) }
         });
-
         safeSend(openaiSocket, {
           type: "response.create",
           response: {
@@ -299,9 +196,7 @@ export function attachRealtimeBridge(server) {
         return;
       }
 
-      if (event.type === "error") {
-        console.error("OpenAI Realtime error:", event.error || event);
-      }
+      if (event.type === "error") console.error("OpenAI Realtime error:", event.error || event);
     });
 
     const heartbeat = setInterval(() => {
@@ -322,27 +217,22 @@ export function attachRealtimeBridge(server) {
       cleanup();
       if (openaiSocket.readyState === WebSocket.OPEN) openaiSocket.close();
     });
-
-    twilioSocket.on("close", () => {
+    twilioSocket.on("close", (code, reason) => {
+      console.log(`Twilio websocket closed: code=${code} reason=${reason?.toString() || "none"}`);
       cleanup();
-      if (openaiSocket.readyState === WebSocket.OPEN || openaiSocket.readyState === WebSocket.CONNECTING) {
-        openaiSocket.close();
-      }
+      if (openaiSocket.readyState === WebSocket.OPEN || openaiSocket.readyState === WebSocket.CONNECTING) openaiSocket.close();
     });
-
     openaiSocket.on("error", error => {
       console.error("OpenAI websocket error:", error.message || error);
       cleanup();
       if (twilioSocket.readyState === WebSocket.OPEN) twilioSocket.close(1011, "AI connection failed");
     });
-
-    openaiSocket.on("close", () => {
+    openaiSocket.on("close", (code, reason) => {
+      console.log(`OpenAI websocket closed: code=${code} reason=${reason?.toString() || "none"}`);
       cleanup();
       if (twilioSocket.readyState === WebSocket.OPEN) twilioSocket.close();
     });
   });
 
-  wss.on("error", error => {
-    console.error("Media stream server error:", error.message || error);
-  });
+  wss.on("error", error => console.error("Media stream server error:", error.message || error));
 }
