@@ -1,6 +1,7 @@
 import businessConfig from "./businessConfig.js";
 import { findAnyAvailableSlot, validateRequestedSlot } from "./availability.js";
 import { saveBookingToSheet } from "./sheets.js";
+import { sendBookingNotification } from "./sms.js";
 import { formatDateForSpeech } from "./helpers.js";
 import {
   normaliseDate,
@@ -118,8 +119,10 @@ export async function runRealtimeTool(name, args = {}, context = {}) {
       if (context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint);
       const validation = await validateRequestedSlot(date, time);
       if (!validation.ok) return { ok: false, reason: validation.reason || "unavailable", suggestion: validation.suggestion || null };
-      const saved = await saveBookingToSheet({ people, date, time, name: nameForBooking, phone: context.callerNumber || "", notes });
+      const customerPhone = context.callerNumber || "";
+      const saved = await saveBookingToSheet({ people, date, time, name: nameForBooking, phone: customerPhone, notes });
       if (!saved) return { ok: false, reason: "save_failed" };
+      await sendBookingNotification({ people, date, time, name: nameForBooking, phone: customerPhone });
       const result = { ok: true, confirmed: true, booking: { people, date, spokenDate: formatDateForSpeech(date), time, name: nameForBooking } };
       context.savedBookings?.set(fingerprint, result);
       return result;
