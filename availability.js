@@ -87,14 +87,19 @@ function bookingWindowForDate(date) {
   // but never wider than the restaurant's real opening hours.
   const configuredEarliest = parseTimeToMinutes(businessConfig.bookingSettings?.earliestBookingTime);
   const configuredLatest = parseTimeToMinutes(businessConfig.bookingSettings?.latestBookingTime);
+  const configuredDuration = Number(businessConfig.bookingSettings?.defaultBookingLengthMinutes);
+  const bookingDuration = Number.isFinite(configuredDuration) && configuredDuration > 0
+    ? configuredDuration
+    : 0;
+  const latestStartBeforeClosing = openingRange.close - bookingDuration;
 
   return {
     open: configuredEarliest === null
       ? openingRange.open
       : Math.max(openingRange.open, configuredEarliest),
     close: configuredLatest === null
-      ? openingRange.close
-      : Math.min(openingRange.close, configuredLatest)
+      ? latestStartBeforeClosing
+      : Math.min(latestStartBeforeClosing, configuredLatest)
   };
 }
 
