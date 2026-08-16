@@ -6,6 +6,7 @@ import { realtimeTools, runRealtimeTool } from "./realtimeTools.js";
 const MAX_QUEUED_AUDIO_FRAMES = 250;
 const HEARTBEAT_MS = 20000;
 const OPENAI_SESSION_TIMEOUT_MS = 10000;
+const RESPONSE_WATCHDOG_MS = 20000;
 
 const LANGUAGE_LOCK =
   "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English.";
@@ -25,20 +26,14 @@ function safeSend(socket, payload) {
 }
 
 function parseJson(raw) {
-  try {
-    return JSON.parse(raw.toString());
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(raw.toString()); } catch { return null; }
 }
 
 function parseArguments(raw) {
   try {
     const parsed = JSON.parse(raw || "{}");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 function createSessionConfig() {
@@ -76,12 +71,7 @@ function createSessionConfig() {
 }
 
 export function attachRealtimeBridge(server) {
-  const wss = new WebSocketServer({
-    server,
-    path: "/media-stream",
-    perMessageDeflate: false,
-    maxPayload: 2 * 1024 * 1024
-  });
+  const wss = new WebSocketServer({ server, path: "/media-stream", perMessageDeflate: false, maxPayload: 2 * 1024 * 1024 });
 
   wss.on("connection", twilioSocket => {
     if (!process.env.OPENAI_API_KEY) {
@@ -100,21 +90,34 @@ export function attachRealtimeBridge(server) {
     let pendingToolContinuation = null;
     let closed = false;
     let pendingHangupMark = null;
+    let responseWatchdog = null;
 
     const queuedAudio = [];
     const processedToolCalls = new Set();
-    const context = {
-      callerNumber: "",
-      callSid: "",
-      savedBookings: new Map(),
-      endCallRequested: false
-    };
+    const context = { callerNumber: "", callSid: "", savedBookings: new Map(), endCallRequested: false };
 
     const model = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
-    const openaiSocket = new WebSocket(
-      `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
-      { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
-    );
+    const openaiSocket = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+    });
+
+    const clearResponseWatchdog = () => {
+      if (responseWatchdog) clearTimeout(responseWatchdog);
+      responseWatchdog = null;
+    };
+
+    const armResponseWatchdog = () => {
+      clearResponseWatchdog();
+      responseWatchdog = setTimeout(() => {
+        if (!responseActive || closed) return;
+        console.error(`Realtime response watchdog fired: call=${context.callSid || "unknown"}`);
+        responseActive = false;
+        if (pendingUserTurn && conversationReady && !context.endCallRequested) {
+          pendingUserTurn = false;
+          requestCallerResponse();
+        }
+      }, RESPONSE_WATCHDOG_MS);
+    };
 
     const sessionTimeout = setTimeout(() => {
       if (!sessionConfigured) {
@@ -125,81 +128,56 @@ export function attachRealtimeBridge(server) {
       }
     }, OPENAI_SESSION_TIMEOUT_MS);
 
-    const createControlledResponse = instructions => {
-      if (!conversationReady && greetingCompleted) return false;
+    const sendResponse = instructions => {
       if (responseActive || openaiSocket.readyState !== WebSocket.OPEN) return false;
-
       responseActive = true;
       const sent = safeSend(openaiSocket, {
         type: "response.create",
-        response: {
-          instructions: `${LANGUAGE_LOCK} ${TURN_RULE} ${instructions}`
-        }
+        response: { instructions: `${LANGUAGE_LOCK} ${TURN_RULE} ${instructions}` }
       });
-
-      if (!sent) responseActive = false;
+      if (sent) armResponseWatchdog();
+      else responseActive = false;
       return sent;
+    };
+
+    const requestCallerResponse = () => {
+      if (!conversationReady || context.endCallRequested) return;
+      if (responseActive || pendingToolContinuation) {
+        pendingUserTurn = true;
+        return;
+      }
+      sendResponse("Respond naturally to the caller's latest completed turn. Give the direct answer first. Do not greet again. Do not repeat a question whose answer is already known. If booking information is needed, ask for only ONE missing detail and then stop.");
     };
 
     const maybeStartGreeting = () => {
       if (!sessionConfigured || !streamSid || greetingStarted) return;
-
       queuedAudio.length = 0;
       greetingStarted = true;
-      responseActive = true;
-
-      const sent = safeSend(openaiSocket, {
-        type: "response.create",
-        response: {
-          instructions: `${LANGUAGE_LOCK} Give exactly one warm, brief phone greeting in British English. Preserve the meaning of: ${businessConfig.greeting}. Do not ask more than one question. Do not give a second greeting. Then stop and listen.`
-        }
-      });
-
-      if (!sent) responseActive = false;
+      sendResponse(`Give exactly one warm, brief phone greeting in British English. Preserve the meaning of: ${businessConfig.greeting}. Do not ask more than one question. Do not give a second greeting. Then stop and listen.`);
     };
 
     const flushQueuedAudio = () => {
       if (!conversationReady || openaiSocket.readyState !== WebSocket.OPEN) return;
       while (queuedAudio.length) {
-        safeSend(openaiSocket, {
-          type: "input_audio_buffer.append",
-          audio: queuedAudio.shift()
-        });
+        safeSend(openaiSocket, { type: "input_audio_buffer.append", audio: queuedAudio.shift() });
       }
-    };
-
-    const respondToCallerTurn = () => {
-      if (!conversationReady || context.endCallRequested) return;
-
-      if (responseActive || pendingToolContinuation) {
-        pendingUserTurn = true;
-        return;
-      }
-
-      createControlledResponse(
-        "Respond naturally to the caller's latest completed turn. Give the direct answer first. Do not greet again. Do not repeat a question whose answer is already known. If you need booking information, ask for only ONE missing detail and then stop."
-      );
     };
 
     const continueAfterResponse = () => {
       if (pendingToolContinuation) {
         const instructions = pendingToolContinuation;
         pendingToolContinuation = null;
-        createControlledResponse(instructions);
+        sendResponse(instructions);
         return;
       }
-
       if (pendingUserTurn) {
         pendingUserTurn = false;
-        respondToCallerTurn();
+        requestCallerResponse();
       }
     };
 
     openaiSocket.on("open", () => {
-      safeSend(openaiSocket, {
-        type: "session.update",
-        session: createSessionConfig()
-      });
+      safeSend(openaiSocket, { type: "session.update", session: createSessionConfig() });
     });
 
     twilioSocket.on("message", raw => {
@@ -221,9 +199,7 @@ export function attachRealtimeBridge(server) {
         if (pendingHangupMark && name === pendingHangupMark) {
           pendingHangupMark = null;
           setTimeout(() => {
-            if (twilioSocket.readyState === WebSocket.OPEN) {
-              twilioSocket.close(1000, "Call completed");
-            }
+            if (twilioSocket.readyState === WebSocket.OPEN) twilioSocket.close(1000, "Call completed");
           }, 100);
         }
         return;
@@ -231,15 +207,11 @@ export function attachRealtimeBridge(server) {
 
       if (msg.event === "media" && msg.media?.payload) {
         if (context.endCallRequested) return;
-
         if (!conversationReady || openaiSocket.readyState !== WebSocket.OPEN) {
           queuedAudio.push(msg.media.payload);
           if (queuedAudio.length > MAX_QUEUED_AUDIO_FRAMES) queuedAudio.shift();
         } else {
-          safeSend(openaiSocket, {
-            type: "input_audio_buffer.append",
-            audio: msg.media.payload
-          });
+          safeSend(openaiSocket, { type: "input_audio_buffer.append", audio: msg.media.payload });
         }
         return;
       }
@@ -265,22 +237,22 @@ export function attachRealtimeBridge(server) {
         return;
       }
 
-      if (event.type === "input_audio_buffer.speech_stopped") {
-        respondToCallerTurn();
+      // With create_response:false, semantic VAD commits the completed user turn
+      // and emits this event. Respond here rather than on speech_stopped so the
+      // model always sees the committed audio item before response.create.
+      if (event.type === "input_audio_buffer.committed") {
+        requestCallerResponse();
         return;
       }
 
       if (event.type === "response.created") {
         responseActive = true;
+        armResponseWatchdog();
         return;
       }
 
       if (event.type === "response.output_audio.delta" && event.delta && streamSid) {
-        safeSend(twilioSocket, {
-          event: "media",
-          streamSid,
-          media: { payload: event.delta }
-        });
+        safeSend(twilioSocket, { event: "media", streamSid, media: { payload: event.delta } });
         return;
       }
 
@@ -291,17 +263,9 @@ export function attachRealtimeBridge(server) {
           flushQueuedAudio();
         }
 
-        const markName = context.endCallRequested
-          ? `hangup-${event.response_id || Date.now()}`
-          : `assistant-${event.response_id || Date.now()}`;
-
+        const markName = context.endCallRequested ? `hangup-${event.response_id || Date.now()}` : `assistant-${event.response_id || Date.now()}`;
         if (context.endCallRequested) pendingHangupMark = markName;
-
-        safeSend(twilioSocket, {
-          event: "mark",
-          streamSid,
-          mark: { name: markName }
-        });
+        safeSend(twilioSocket, { event: "mark", streamSid, mark: { name: markName } });
         return;
       }
 
@@ -312,7 +276,6 @@ export function attachRealtimeBridge(server) {
 
         const args = parseArguments(event.arguments);
         let result;
-
         try {
           result = await runRealtimeTool(event.name, args, context);
         } catch (error) {
@@ -320,17 +283,11 @@ export function attachRealtimeBridge(server) {
           result = { ok: false, reason: "tool_error" };
         }
 
-        if (result?.action === "end_call") {
-          context.endCallRequested = true;
-        }
+        if (result?.action === "end_call") context.endCallRequested = true;
 
         safeSend(openaiSocket, {
           type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(result)
-          }
+          item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) }
         });
 
         pendingToolContinuation = context.endCallRequested
@@ -340,22 +297,23 @@ export function attachRealtimeBridge(server) {
       }
 
       if (event.type === "response.done") {
+        clearResponseWatchdog();
         responseActive = false;
-
         if (event.response?.status && event.response.status !== "completed") {
-          console.warn(
-            `Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`,
-            event.response.status_details || ""
-          );
+          console.warn(`Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`, event.response.status_details || "");
         }
-
         continueAfterResponse();
         return;
       }
 
       if (event.type === "error") {
         console.error("OpenAI Realtime error:", event.error || event);
+        clearResponseWatchdog();
         responseActive = false;
+        if (pendingUserTurn) {
+          pendingUserTurn = false;
+          requestCallerResponse();
+        }
       }
     });
 
@@ -368,6 +326,7 @@ export function attachRealtimeBridge(server) {
       if (closed) return;
       closed = true;
       clearTimeout(sessionTimeout);
+      clearResponseWatchdog();
       clearInterval(heartbeat);
       queuedAudio.length = 0;
       context.savedBookings.clear();
@@ -382,17 +341,13 @@ export function attachRealtimeBridge(server) {
     twilioSocket.on("close", (code, reason) => {
       console.log(`Twilio websocket closed: code=${code} reason=${reason?.toString() || "none"}`);
       cleanup();
-      if (openaiSocket.readyState === WebSocket.OPEN || openaiSocket.readyState === WebSocket.CONNECTING) {
-        openaiSocket.close();
-      }
+      if (openaiSocket.readyState === WebSocket.OPEN || openaiSocket.readyState === WebSocket.CONNECTING) openaiSocket.close();
     });
 
     openaiSocket.on("error", error => {
       console.error("OpenAI websocket error:", error.message || error);
       cleanup();
-      if (twilioSocket.readyState === WebSocket.OPEN) {
-        twilioSocket.close(1011, "AI connection failed");
-      }
+      if (twilioSocket.readyState === WebSocket.OPEN) twilioSocket.close(1011, "AI connection failed");
     });
 
     openaiSocket.on("close", (code, reason) => {
@@ -402,7 +357,5 @@ export function attachRealtimeBridge(server) {
     });
   });
 
-  wss.on("error", error => {
-    console.error("Media stream server error:", error.message || error);
-  });
+  wss.on("error", error => console.error("Media stream server error:", error.message || error));
 }
