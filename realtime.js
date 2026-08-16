@@ -6,7 +6,12 @@ import { realtimeTools, runRealtimeTool } from "./realtimeTools.js";
 const MAX_QUEUED_AUDIO_FRAMES = 250;
 const HEARTBEAT_MS = 20000;
 const OPENAI_SESSION_TIMEOUT_MS = 10000;
-const LANGUAGE_LOCK = "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English. This rule overrides any inferred language.";
+
+const LANGUAGE_LOCK =
+  "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English.";
+
+const TURN_RULE =
+  "TURN RULE: Give one concise response. Ask AT MOST ONE question in this turn. Never ask multiple booking questions in one reply. Never bundle several missing details together. If a booking detail is missing, ask only for the single next most useful missing detail, then stop and wait for the caller.";
 
 function safeSend(socket, payload) {
   if (socket.readyState !== WebSocket.OPEN) return false;
@@ -36,10 +41,10 @@ function parseArguments(raw) {
   }
 }
 
-function createSessionConfig(createResponse = true) {
+function createSessionConfig() {
   return {
     type: "realtime",
-    instructions: `${LANGUAGE_LOCK}\n\n${buildRealtimeInstructions()}`,
+    instructions: `${LANGUAGE_LOCK}\n${TURN_RULE}\n\n${buildRealtimeInstructions()}`,
     output_modalities: ["audio"],
     tools: realtimeTools,
     tool_choice: "auto",
@@ -52,12 +57,12 @@ function createSessionConfig(createResponse = true) {
         transcription: {
           model: "gpt-4o-mini-transcribe",
           language: "en",
-          prompt: `Transcribe ONLY as English. This is a British English restaurant phone call for ${businessConfig.businessName}. Expect English names, dates, times, menu questions and table bookings. Do not infer another language from accent, noise or unclear audio.`
+          prompt: `Transcribe only as English. This is a British English restaurant phone call for ${businessConfig.businessName}. Expect English names, dates, times, menu questions and table bookings.`
         },
         turn_detection: {
           type: "semantic_vad",
           eagerness: "medium",
-          create_response: createResponse,
+          create_response: false,
           interrupt_response: false
         }
       },
@@ -89,8 +94,10 @@ export function attachRealtimeBridge(server) {
     let sessionConfigured = false;
     let greetingStarted = false;
     let greetingCompleted = false;
-    let activatingConversation = false;
     let conversationReady = false;
+    let responseActive = false;
+    let pendingUserTurn = false;
+    let pendingToolContinuation = null;
     let closed = false;
     let pendingHangupMark = null;
 
@@ -118,17 +125,37 @@ export function attachRealtimeBridge(server) {
       }
     }, OPENAI_SESSION_TIMEOUT_MS);
 
-    const maybeStartGreeting = () => {
-      if (!sessionConfigured || !streamSid || greetingStarted) return;
-      queuedAudio.length = 0;
-      greetingStarted = true;
+    const createControlledResponse = instructions => {
+      if (!conversationReady && greetingCompleted) return false;
+      if (responseActive || openaiSocket.readyState !== WebSocket.OPEN) return false;
 
-      safeSend(openaiSocket, {
+      responseActive = true;
+      const sent = safeSend(openaiSocket, {
         type: "response.create",
         response: {
-          instructions: `${LANGUAGE_LOCK} Give exactly one warm, brief phone greeting in British English. Preserve the meaning of: ${businessConfig.greeting}. Do not give a second greeting. Then stop and listen.`
+          instructions: `${LANGUAGE_LOCK} ${TURN_RULE} ${instructions}`
         }
       });
+
+      if (!sent) responseActive = false;
+      return sent;
+    };
+
+    const maybeStartGreeting = () => {
+      if (!sessionConfigured || !streamSid || greetingStarted) return;
+
+      queuedAudio.length = 0;
+      greetingStarted = true;
+      responseActive = true;
+
+      const sent = safeSend(openaiSocket, {
+        type: "response.create",
+        response: {
+          instructions: `${LANGUAGE_LOCK} Give exactly one warm, brief phone greeting in British English. Preserve the meaning of: ${businessConfig.greeting}. Do not ask more than one question. Do not give a second greeting. Then stop and listen.`
+        }
+      });
+
+      if (!sent) responseActive = false;
     };
 
     const flushQueuedAudio = () => {
@@ -141,19 +168,37 @@ export function attachRealtimeBridge(server) {
       }
     };
 
-    const enableConversation = () => {
-      if (activatingConversation || conversationReady || openaiSocket.readyState !== WebSocket.OPEN) return;
-      activatingConversation = true;
-      safeSend(openaiSocket, {
-        type: "session.update",
-        session: createSessionConfig(true)
-      });
+    const respondToCallerTurn = () => {
+      if (!conversationReady || context.endCallRequested) return;
+
+      if (responseActive || pendingToolContinuation) {
+        pendingUserTurn = true;
+        return;
+      }
+
+      createControlledResponse(
+        "Respond naturally to the caller's latest completed turn. Give the direct answer first. Do not greet again. Do not repeat a question whose answer is already known. If you need booking information, ask for only ONE missing detail and then stop."
+      );
+    };
+
+    const continueAfterResponse = () => {
+      if (pendingToolContinuation) {
+        const instructions = pendingToolContinuation;
+        pendingToolContinuation = null;
+        createControlledResponse(instructions);
+        return;
+      }
+
+      if (pendingUserTurn) {
+        pendingUserTurn = false;
+        respondToCallerTurn();
+      }
     };
 
     openaiSocket.on("open", () => {
       safeSend(openaiSocket, {
         type: "session.update",
-        session: createSessionConfig(false)
+        session: createSessionConfig()
       });
     });
 
@@ -216,14 +261,17 @@ export function attachRealtimeBridge(server) {
           sessionConfigured = true;
           clearTimeout(sessionTimeout);
           maybeStartGreeting();
-          return;
         }
+        return;
+      }
 
-        if (activatingConversation) {
-          activatingConversation = false;
-          conversationReady = true;
-          flushQueuedAudio();
-        }
+      if (event.type === "input_audio_buffer.speech_stopped") {
+        respondToCallerTurn();
+        return;
+      }
+
+      if (event.type === "response.created") {
+        responseActive = true;
         return;
       }
 
@@ -239,7 +287,8 @@ export function attachRealtimeBridge(server) {
       if (event.type === "response.output_audio.done" && streamSid) {
         if (greetingStarted && !greetingCompleted) {
           greetingCompleted = true;
-          enableConversation();
+          conversationReady = true;
+          flushQueuedAudio();
         }
 
         const markName = context.endCallRequested
@@ -284,27 +333,29 @@ export function attachRealtimeBridge(server) {
           }
         });
 
-        safeSend(openaiSocket, {
-          type: "response.create",
-          response: {
-            instructions: context.endCallRequested
-              ? `${LANGUAGE_LOCK} Say one short friendly goodbye in British English only. Do not ask anything else.`
-              : `${LANGUAGE_LOCK} Continue naturally in British English only from the tool result. Give the direct answer first. Do not greet the caller again. Do not repeat questions whose answers are already known.`
-          }
-        });
+        pendingToolContinuation = context.endCallRequested
+          ? "Say one short friendly goodbye in British English only. Do not ask anything else."
+          : "Continue naturally from the tool result. Give the direct answer first. Ask at most ONE question. Do not greet again. Do not repeat information or questions whose answers are already known.";
         return;
       }
 
-      if (event.type === "response.done" && event.response?.status && event.response.status !== "completed") {
-        console.warn(
-          `Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`,
-          event.response.status_details || ""
-        );
+      if (event.type === "response.done") {
+        responseActive = false;
+
+        if (event.response?.status && event.response.status !== "completed") {
+          console.warn(
+            `Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`,
+            event.response.status_details || ""
+          );
+        }
+
+        continueAfterResponse();
         return;
       }
 
       if (event.type === "error") {
         console.error("OpenAI Realtime error:", event.error || event);
+        responseActive = false;
       }
     });
 
