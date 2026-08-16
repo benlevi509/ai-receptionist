@@ -40,6 +40,7 @@ const businessConfig = {
     defaultBookingLengthMinutes: 90,
     maxBookingsPerSlot: 4,
     maximumPartySize: 12,
+    notificationPhoneNumber: "+447402767133",
     note: "The phone receptionist can take table reservation requests using the internal booking sheet. These capacity limits are internal operating defaults, not published Piani policies."
   },
 
