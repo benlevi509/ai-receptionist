@@ -6,6 +6,7 @@ import { realtimeTools, runRealtimeTool } from "./realtimeTools.js";
 const MAX_QUEUED_AUDIO_FRAMES = 250;
 const HEARTBEAT_MS = 20000;
 const OPENAI_SESSION_TIMEOUT_MS = 10000;
+const LANGUAGE_LOCK = "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English. This rule overrides any inferred language.";
 
 function safeSend(socket, payload) {
   if (socket.readyState !== WebSocket.OPEN) return false;
@@ -38,7 +39,7 @@ function parseArguments(raw) {
 function createSessionConfig(createResponse = true) {
   return {
     type: "realtime",
-    instructions: buildRealtimeInstructions(),
+    instructions: `${LANGUAGE_LOCK}\n\n${buildRealtimeInstructions()}`,
     output_modalities: ["audio"],
     tools: realtimeTools,
     tool_choice: "auto",
@@ -51,7 +52,7 @@ function createSessionConfig(createResponse = true) {
         transcription: {
           model: "gpt-4o-mini-transcribe",
           language: "en",
-          prompt: `British English restaurant phone call for ${businessConfig.businessName}. Expect names, dates, times, simple business questions and table bookings.`
+          prompt: `Transcribe ONLY as English. This is a British English restaurant phone call for ${businessConfig.businessName}. Expect English names, dates, times, menu questions and table bookings. Do not infer another language from accent, noise or unclear audio.`
         },
         turn_detection: {
           type: "semantic_vad",
@@ -119,16 +120,13 @@ export function attachRealtimeBridge(server) {
 
     const maybeStartGreeting = () => {
       if (!sessionConfigured || !streamSid || greetingStarted) return;
-
-      // Discard only pre-greeting startup noise. Audio arriving after this point is
-      // queued so a caller who speaks during the greeting is not lost.
       queuedAudio.length = 0;
       greetingStarted = true;
 
       safeSend(openaiSocket, {
         type: "response.create",
         response: {
-          instructions: `Give exactly one warm, brief phone greeting. Preserve the meaning of: ${businessConfig.greeting}. Do not give a second greeting. Then stop and listen.`
+          instructions: `${LANGUAGE_LOCK} Give exactly one warm, brief phone greeting in British English. Preserve the meaning of: ${businessConfig.greeting}. Do not give a second greeting. Then stop and listen.`
         }
       });
     };
@@ -153,9 +151,6 @@ export function attachRealtimeBridge(server) {
     };
 
     openaiSocket.on("open", () => {
-      // Automatic responses are deliberately disabled during startup. This prevents
-      // startup noise or early buffered audio from racing the manual greeting and
-      // creating a second "hello".
       safeSend(openaiSocket, {
         type: "session.update",
         session: createSessionConfig(false)
@@ -293,8 +288,8 @@ export function attachRealtimeBridge(server) {
           type: "response.create",
           response: {
             instructions: context.endCallRequested
-              ? "Say one short friendly goodbye only. Do not ask anything else."
-              : "Continue naturally from the tool result. Give the direct answer first. Do not greet the caller again. Do not repeat questions whose answers are already known."
+              ? `${LANGUAGE_LOCK} Say one short friendly goodbye in British English only. Do not ask anything else.`
+              : `${LANGUAGE_LOCK} Continue naturally in British English only from the tool result. Give the direct answer first. Do not greet the caller again. Do not repeat questions whose answers are already known.`
           }
         });
         return;
