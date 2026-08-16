@@ -3,7 +3,8 @@ import fs from "fs";
 
 import { TIME_ZONE } from "./helpers.js";
 
-const SHEET_RANGE = "Sheet1!A:G";
+// Keep this range in sync with the live Google Sheet tab used for reservations.
+const SHEET_RANGE = "Bookings!A:G";
 const GOOGLE_REQUEST_TIMEOUT_MS = 6000;
 let sheetsClientPromise = null;
 
