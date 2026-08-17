@@ -3,7 +3,7 @@ const businessConfig = {
 
   businessType: "pizza restaurant and takeaway",
 
-  greeting: "Hello, thank you for calling Piani Pizza. How can I help?",
+  greeting: "Hello, welcome to Piani Pizza. How may I assist you today?",
 
   tone:
     "Warm, quick, natural British restaurant receptionist. Sound human, relaxed and efficient. Use short conversational sentences, answer direct questions immediately, and never sound robotic or scripted.",
@@ -39,7 +39,7 @@ const businessConfig = {
     bookingIntervalMinutes: 30,
     defaultBookingLengthMinutes: 90,
     maxBookingsPerSlot: 4,
-    maximumPartySize: 12,
+    maximumPartySize: 6,
     notificationPhoneNumber: "+447402767133",
     note: "The phone receptionist can take table reservation requests using the internal booking sheet. These capacity limits are internal operating defaults, not published Piani policies."
   },
