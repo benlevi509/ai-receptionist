@@ -73,13 +73,10 @@ export const realtimeTools = [
       },
       required: ["people", "date", "time", "name"], additionalProperties: false
     }
-  },
-  { type: "function", name: "end_call", description: "Use immediately when the caller clearly ends the conversation.", parameters: { type: "object", properties: {}, additionalProperties: false } }
+  }
 ];
 
 export async function runRealtimeTool(name, args = {}, context = {}) {
-  if (name === "end_call") return { ok: true, action: "end_call" };
-
   if (name === "check_day_availability") {
     const date = normaliseDate(args.date);
     if (!date) return { ok: false, reason: "invalid_date" };
