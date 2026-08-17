@@ -173,16 +173,16 @@ export function normaliseTime(value) {
   if (/\bnoon\b/.test(text)) return { time: "12:00 PM", ambiguous: false };
   if (/\bmidnight\b/.test(text)) return { time: "12:00 AM", ambiguous: false };
 
+  const explicit12 = text.match(/\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
+  if (explicit12) {
+    return { time: canonicalTime(Number(explicit12[1]), Number(explicit12[2] || 0), explicit12[3].toUpperCase()), ambiguous: false };
+  }
+
   // Only treat colon times as 24-hour clock when the hour makes that unambiguous.
   // "2:30" means 2:30 PM for this restaurant; "14:30" remains 2:30 PM.
   const explicit24 = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
   if (explicit24 && !/\b(am|pm)\b/.test(text) && Number(explicit24[1]) > 12) {
     return { time: from24Hour(explicit24[1], explicit24[2]), ambiguous: false };
-  }
-
-  const explicit12 = text.match(/\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
-  if (explicit12) {
-    return { time: canonicalTime(Number(explicit12[1]), Number(explicit12[2] || 0), explicit12[3].toUpperCase()), ambiguous: false };
   }
 
   const colon12 = text.match(/\b(1[0-2]|0?[1-9]):([0-5]\d)\b/);
