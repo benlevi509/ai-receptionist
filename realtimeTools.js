@@ -1,5 +1,5 @@
 import businessConfig from "./businessConfig.js";
-import { findAnyAvailableSlot, validateRequestedSlot } from "./availability.js";
+import { validateRequestedSlot } from "./availability.js";
 import { saveBookingToSheet } from "./sheets.js";
 import { sendBookingNotification } from "./sms.js";
 import { formatDateForSpeech } from "./helpers.js";
@@ -49,7 +49,7 @@ export const realtimeTools = [
   {
     type: "function",
     name: "check_day_availability",
-    description: "Use when the caller asks whether there is any space on a day but gives no time. Distinguishes a closed day from a genuinely fully booked/open day.",
+    description: "Use when the caller asks whether they can book on a day but gives no time. If the restaurant is open that day, treat the day as bookable and ask for the time next. Only report the day unavailable when the restaurant is closed.",
     parameters: { type: "object", properties: { date: { type: "string" } }, required: ["date"], additionalProperties: false }
   },
   {
@@ -84,10 +84,9 @@ export async function runRealtimeTool(name, args = {}, context = {}) {
     const date = normaliseDate(args.date);
     if (!date) return { ok: false, reason: "invalid_date" };
     if (isClosedDate(date)) {
-      return { ok: true, available: false, closed: true, reason: "closed", date, spokenDate: formatDateForSpeech(date), firstAvailableTime: null };
+      return { ok: true, available: false, closed: true, reason: "closed", date, spokenDate: formatDateForSpeech(date) };
     }
-    const firstAvailableTime = await findAnyAvailableSlot(date);
-    return { ok: true, available: Boolean(firstAvailableTime), closed: false, reason: firstAvailableTime ? null : "full", date, spokenDate: formatDateForSpeech(date), firstAvailableTime: firstAvailableTime || null };
+    return { ok: true, available: true, closed: false, reason: null, date, spokenDate: formatDateForSpeech(date), needsTime: true };
   }
 
   if (name === "check_availability") {
