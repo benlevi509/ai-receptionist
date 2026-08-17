@@ -6,6 +6,7 @@ import { realtimeTools, runRealtimeTool } from "./realtimeTools.js";
 const MAX_QUEUED_AUDIO_FRAMES = 250;
 const HEARTBEAT_MS = 20000;
 const OPENAI_SESSION_TIMEOUT_MS = 10000;
+const CALLER_SILENCE_MS = 30000;
 
 const LANGUAGE_LOCK =
   "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English.";
@@ -61,7 +62,7 @@ function createSessionConfig(createResponse = false) {
         },
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "medium",
+          eagerness: "high",
           create_response: createResponse,
           interrupt_response: createResponse
         }
@@ -99,6 +100,8 @@ export function attachRealtimeBridge(server) {
     let responseActive = false;
     let closed = false;
     let pendingHangupMark = null;
+    let silenceTimer = null;
+    let silencePromptSent = false;
 
     const queuedAudio = [];
     const processedToolCalls = new Set();
@@ -114,6 +117,25 @@ export function attachRealtimeBridge(server) {
       `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
       { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } }
     );
+
+    const clearSilenceTimer = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = null;
+    };
+
+    const armSilenceTimer = () => {
+      clearSilenceTimer();
+      if (!conversationReady || context.endCallRequested || silencePromptSent) return;
+      silenceTimer = setTimeout(() => {
+        silenceTimer = null;
+        if (!conversationReady || responseActive || context.endCallRequested || silencePromptSent || openaiSocket.readyState !== WebSocket.OPEN) return;
+        silencePromptSent = true;
+        safeSend(openaiSocket, {
+          type: "response.create",
+          response: { instructions: `${LANGUAGE_LOCK} Say only a brief natural check such as "Hello, are you still there?" Then STOP and listen.` }
+        });
+      }, CALLER_SILENCE_MS);
+    };
 
     const sessionTimeout = setTimeout(() => {
       if (!sessionConfigured) {
@@ -235,10 +257,13 @@ export function attachRealtimeBridge(server) {
 
       if (event.type === "response.created") {
         responseActive = true;
+        clearSilenceTimer();
         return;
       }
 
       if (event.type === "input_audio_buffer.speech_started") {
+        clearSilenceTimer();
+        silencePromptSent = false;
         if (responseActive && streamSid) {
           safeSend(twilioSocket, { event: "clear", streamSid });
         }
@@ -291,6 +316,7 @@ export function attachRealtimeBridge(server) {
 
         if (result?.action === "end_call") {
           context.endCallRequested = true;
+          clearSilenceTimer();
         }
 
         safeSend(openaiSocket, {
@@ -306,7 +332,7 @@ export function attachRealtimeBridge(server) {
           type: "response.create",
           response: {
             instructions: context.endCallRequested
-              ? `${LANGUAGE_LOCK} Say one short friendly goodbye only. Do not ask anything else.`
+              ? `${LANGUAGE_LOCK} Say one short friendly goodbye only, such as "Take care and have a great day." Do not ask anything else.`
               : `${LANGUAGE_LOCK} ${TURN_RULE} Continue from the tool result. Give the direct answer first. Ask at most ONE question, then STOP and wait. Do not greet again or repeat known information.`
           }
         });
@@ -315,6 +341,7 @@ export function attachRealtimeBridge(server) {
 
       if (event.type === "response.done") {
         responseActive = false;
+        if (!context.endCallRequested) armSilenceTimer();
         if (event.response?.status && event.response.status !== "completed") {
           console.warn(
             `Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`,
@@ -339,6 +366,7 @@ export function attachRealtimeBridge(server) {
       if (closed) return;
       closed = true;
       clearTimeout(sessionTimeout);
+      clearSilenceTimer();
       clearInterval(heartbeat);
       queuedAudio.length = 0;
       context.savedBookings.clear();
