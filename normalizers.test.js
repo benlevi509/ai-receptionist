@@ -29,11 +29,20 @@ test("understands natural British time phrases", () => {
   });
 });
 
-test("does not silently guess genuinely ambiguous late clock times", () => {
+test("defaults restaurant times without AM or PM to PM", () => {
+  assert.deepEqual(normaliseTime("2:30"), {
+    time: "2:30 PM",
+    ambiguous: false
+  });
+
   assert.deepEqual(normaliseTime("five past nine"), {
-    time: null,
-    ambiguous: true,
-    candidate: "9:05"
+    time: "9:05 PM",
+    ambiguous: false
+  });
+
+  assert.deepEqual(normaliseTime("2:30 am"), {
+    time: "2:30 AM",
+    ambiguous: false
   });
 });
 
