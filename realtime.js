@@ -100,6 +100,7 @@ export function attachRealtimeBridge(server) {
     let responseActive = false;
     let closed = false;
     let pendingHangupMark = null;
+    let pendingSilenceMark = null;
     let silenceTimer = null;
     let silencePromptSent = false;
 
@@ -208,6 +209,11 @@ export function attachRealtimeBridge(server) {
               twilioSocket.close(1000, "Call completed");
             }
           }, 100);
+          return;
+        }
+        if (pendingSilenceMark && name === pendingSilenceMark) {
+          pendingSilenceMark = null;
+          armSilenceTimer();
         }
         return;
       }
@@ -258,11 +264,13 @@ export function attachRealtimeBridge(server) {
       if (event.type === "response.created") {
         responseActive = true;
         clearSilenceTimer();
+        pendingSilenceMark = null;
         return;
       }
 
       if (event.type === "input_audio_buffer.speech_started") {
         clearSilenceTimer();
+        pendingSilenceMark = null;
         silencePromptSent = false;
         if (responseActive && streamSid) {
           safeSend(twilioSocket, { event: "clear", streamSid });
@@ -290,6 +298,7 @@ export function attachRealtimeBridge(server) {
           : `assistant-${event.response_id || Date.now()}`;
 
         if (context.endCallRequested) pendingHangupMark = markName;
+        else if (!silencePromptSent) pendingSilenceMark = markName;
 
         safeSend(twilioSocket, {
           event: "mark",
@@ -317,6 +326,7 @@ export function attachRealtimeBridge(server) {
         if (result?.action === "end_call") {
           context.endCallRequested = true;
           clearSilenceTimer();
+          pendingSilenceMark = null;
         }
 
         safeSend(openaiSocket, {
@@ -341,7 +351,6 @@ export function attachRealtimeBridge(server) {
 
       if (event.type === "response.done") {
         responseActive = false;
-        if (!context.endCallRequested) armSilenceTimer();
         if (event.response?.status && event.response.status !== "completed") {
           console.warn(
             `Realtime response ended with status=${event.response.status} call=${context.callSid || "unknown"}`,
