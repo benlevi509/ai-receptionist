@@ -11,7 +11,7 @@ const LANGUAGE_LOCK =
   "LANGUAGE LOCK: Speak ONLY in natural British English. Never answer in Italian, German, French, Spanish or any other language. Never switch language because of accent, noise, mis-transcription, a foreign-sounding name, or a previous model output. If speech is unclear, ask for clarification in British English.";
 
 const TURN_RULE =
-  "TURN RULE: One caller turn gets one assistant turn. Give one concise response. Ask AT MOST ONE question. Never bundle multiple questions or missing booking details together. After asking one question, STOP and wait for the caller to answer before speaking again.";
+  "TURN RULE: One caller turn gets one assistant turn. Answer the caller fully, using as much speech as genuinely needed for the question, but do not ramble. Ask AT MOST ONE question. Never bundle multiple questions or missing booking details together. After asking one question, STOP and wait for the caller to answer before speaking again.";
 
 function safeSend(socket, payload) {
   if (socket.readyState !== WebSocket.OPEN) return false;
@@ -48,7 +48,7 @@ function createSessionConfig(createResponse = false) {
     output_modalities: ["audio"],
     tools: realtimeTools,
     tool_choice: "auto",
-    max_output_tokens: 300,
+    max_output_tokens: "inf",
     truncation: { type: "retention_ratio", retention_ratio: 0.8 },
     audio: {
       input: {
@@ -132,7 +132,7 @@ export function attachRealtimeBridge(server) {
       safeSend(openaiSocket, {
         type: "response.create",
         response: {
-          instructions: `${LANGUAGE_LOCK} ${TURN_RULE} Give exactly one warm, brief phone greeting. Preserve the meaning of: ${businessConfig.greeting}. Ask at most one question. Then STOP and listen.`
+          instructions: `${LANGUAGE_LOCK} Say exactly this greeting and nothing before it: "${businessConfig.greeting}" Then STOP and listen.`
         }
       });
     };
