@@ -55,7 +55,7 @@ export const realtimeTools = [
   {
     type: "function",
     name: "check_availability",
-    description: "Check a restaurant date and time before saying it is available. If time is ambiguous between AM and PM, ask the caller to clarify instead of guessing.",
+    description: "Check a restaurant date and time before saying it is available. Times without AM or PM are normalised as PM unless the caller explicitly says AM/morning.",
     parameters: {
       type: "object",
       properties: { date: { type: "string" }, time: { type: "string" } },
@@ -73,6 +73,12 @@ export const realtimeTools = [
       },
       required: ["people", "date", "time", "name"], additionalProperties: false
     }
+  },
+  {
+    type: "function",
+    name: "end_call",
+    description: "End the phone call ONLY after the caller clearly indicates they are finished, for example 'that's all', 'nothing else', 'no thanks', or 'goodbye'. Never use this merely because the conversation pauses or seems complete.",
+    parameters: { type: "object", properties: {}, additionalProperties: false }
   }
 ];
 
@@ -124,5 +130,10 @@ export async function runRealtimeTool(name, args = {}, context = {}) {
       return result;
     });
   }
+
+  if (name === "end_call") {
+    return { ok: true, action: "end_call" };
+  }
+
   return { ok: false, reason: "unknown_tool" };
 }
