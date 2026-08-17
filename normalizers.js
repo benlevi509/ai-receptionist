@@ -83,8 +83,8 @@ function inferMeridiem(hour, text) {
   if (/\bam\b/.test(text)) return "AM";
   if (/\bpm\b/.test(text)) return "PM";
 
-  if (hour >= 1 && hour <= 8) return "PM";
-  return null;
+  // Restaurant callers normally mean an afternoon/evening slot when they omit AM/PM.
+  return "PM";
 }
 
 function canonicalTime(hour, minute, meridiem) {
@@ -173,14 +173,22 @@ export function normaliseTime(value) {
   if (/\bnoon\b/.test(text)) return { time: "12:00 PM", ambiguous: false };
   if (/\bmidnight\b/.test(text)) return { time: "12:00 AM", ambiguous: false };
 
+  // Only treat colon times as 24-hour clock when the hour makes that unambiguous.
+  // "2:30" means 2:30 PM for this restaurant; "14:30" remains 2:30 PM.
   const explicit24 = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-  if (explicit24 && !/\b(am|pm)\b/.test(text)) {
+  if (explicit24 && !/\b(am|pm)\b/.test(text) && Number(explicit24[1]) > 12) {
     return { time: from24Hour(explicit24[1], explicit24[2]), ambiguous: false };
   }
 
   const explicit12 = text.match(/\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
   if (explicit12) {
     return { time: canonicalTime(Number(explicit12[1]), Number(explicit12[2] || 0), explicit12[3].toUpperCase()), ambiguous: false };
+  }
+
+  const colon12 = text.match(/\b(1[0-2]|0?[1-9]):([0-5]\d)\b/);
+  if (colon12) {
+    const hour = Number(colon12[1]);
+    return { time: canonicalTime(hour, Number(colon12[2]), inferMeridiem(hour, text)), ambiguous: false };
   }
 
   const relative = text.match(/\b(quarter|half|(?:\d{1,2}|[a-z]+(?:[ -][a-z]+)?))\s+(past|to)\s+(\d{1,2}|[a-z]+)\b/);
@@ -195,7 +203,6 @@ export function normaliseTime(value) {
         if (hour === 0) hour = 12;
       }
       const meridiem = inferMeridiem(hour, text);
-      if (!meridiem) return { time: null, ambiguous: true, candidate: `${hour}:${pad(minute)}` };
       return { time: canonicalTime(hour, minute, meridiem), ambiguous: false };
     }
   }
@@ -205,7 +212,6 @@ export function normaliseTime(value) {
     const hour = wordNumber(halfBare[1]);
     if (hour >= 1 && hour <= 12) {
       const meridiem = inferMeridiem(hour, text);
-      if (!meridiem) return { time: null, ambiguous: true, candidate: `${hour}:30` };
       return { time: canonicalTime(hour, 30, meridiem), ambiguous: false };
     }
   }
@@ -216,7 +222,6 @@ export function normaliseTime(value) {
     const minute = wordNumber(ohMinute[2]);
     if (hour >= 1 && hour <= 12 && minute >= 0 && minute <= 9) {
       const meridiem = inferMeridiem(hour, text);
-      if (!meridiem) return { time: null, ambiguous: true, candidate: `${hour}:${pad(minute)}` };
       return { time: canonicalTime(hour, minute, meridiem), ambiguous: false };
     }
   }
@@ -227,7 +232,6 @@ export function normaliseTime(value) {
     const minute = minuteWords(twoPart[2]);
     if (hour >= 1 && hour <= 12 && minute != null) {
       const meridiem = inferMeridiem(hour, text);
-      if (!meridiem) return { time: null, ambiguous: true, candidate: `${hour}:${pad(minute)}` };
       return { time: canonicalTime(hour, minute, meridiem), ambiguous: false };
     }
   }
@@ -237,7 +241,6 @@ export function normaliseTime(value) {
     const hour = wordNumber(bare[1]);
     if (hour >= 1 && hour <= 12) {
       const meridiem = inferMeridiem(hour, text);
-      if (!meridiem) return { time: null, ambiguous: true, candidate: `${hour}:00` };
       return { time: canonicalTime(hour, 0, meridiem), ambiguous: false };
     }
   }
