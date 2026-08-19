@@ -17,13 +17,12 @@ function mergeBusinessProfile(row = {}) {
   if (row.menu && typeof row.menu === "object") config.menu = row.menu;
 
   const maxParty = Number(row.max_booking_size);
-  if (Number.isInteger(maxParty) && maxParty > 0) {
-    config.bookingSettings.maximumPartySize = maxParty;
-  }
+  if (Number.isInteger(maxParty) && maxParty > 0) config.bookingSettings.maximumPartySize = maxParty;
 
-  if (row.sms_recipient_number) {
-    config.bookingSettings.notificationPhoneNumber = String(row.sms_recipient_number).trim();
-  }
+  // The first table was created manually with this misspelt column name.
+  // Support both spellings so existing data keeps working.
+  const smsRecipient = row.sms_recipient_number || row.sms_reciept_number;
+  if (smsRecipient) config.bookingSettings.notificationPhoneNumber = String(smsRecipient).trim();
 
   config.backend = {
     source: "supabase",
@@ -49,11 +48,7 @@ async function fetchBusinessRow(calledNumber) {
       url.searchParams.set("limit", "1");
 
       const response = await fetch(url, {
-        headers: {
-          apikey: secretKey,
-          Authorization: `Bearer ${secretKey}`,
-          Accept: "application/json"
-        },
+        headers: { apikey: secretKey, Authorization: `Bearer ${secretKey}`, Accept: "application/json" },
         signal: AbortSignal.timeout(2500)
       });
 
@@ -76,10 +71,10 @@ export async function resolveBusinessForCall(callSid, calledNumber) {
       resolved = mergeBusinessProfile(row);
       console.log(`Loaded business profile from Supabase: ${resolved.businessName}`);
     } else {
-      console.warn(`No active Supabase business profile found for ${calledNumber || "unknown number"}; using code fallback.`);
+      console.warn(`No active Supabase business profile found for ${calledNumber || "unknown number"}; using neutral fallback.`);
     }
   } catch (error) {
-    console.warn("Business profile resolution failed; using code fallback:", error.message || error);
+    console.warn("Business profile resolution failed; using neutral fallback:", error.message || error);
   }
 
   if (callSid) callBusinessConfigs.set(callSid, resolved);
