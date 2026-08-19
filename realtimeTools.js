@@ -1,139 +1,28 @@
-import businessConfig from "./businessConfig.js";
 import { validateRequestedSlot } from "./availability.js";
 import { saveBookingToSheet } from "./sheets.js";
 import { sendBookingNotification } from "./sms.js";
 import { formatDateForSpeech } from "./helpers.js";
-import {
-  normaliseDate,
-  normaliseName,
-  normalisePeople,
-  normaliseTime
-} from "./normalizers.js";
+import { normaliseDate, normaliseName, normalisePeople, normaliseTime } from "./normalizers.js";
 
 const bookingLocks = new Map();
-
-function withBookingLock(key, operation) {
-  const previous = bookingLocks.get(key) || Promise.resolve();
-  const next = previous.catch(() => undefined).then(operation);
-  bookingLocks.set(key, next);
-  return next.finally(() => {
-    if (bookingLocks.get(key) === next) bookingLocks.delete(key);
-  });
-}
-
-function bookingFingerprint({ people, date, time, name }) {
-  return `${people}|${date}|${time}|${String(name).toLowerCase()}`;
-}
-
-function parseDateAndTime(args) {
-  const date = normaliseDate(args.date);
-  const parsedTime = normaliseTime(args.time);
-  return { date, ...parsedTime };
-}
-
-function weekdayForDate(date) {
-  const match = String(date || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!match) return null;
-  const d = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
-  if (Number.isNaN(d.getTime())) return null;
-  return ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"][d.getDay()];
-}
-
-function isClosedDate(date) {
-  const weekday = weekdayForDate(date);
-  if (!weekday) return false;
-  return /^closed$/i.test(String(businessConfig.openingHours?.[weekday] || "").trim());
-}
+function withBookingLock(key, operation) { const previous = bookingLocks.get(key) || Promise.resolve(); const next = previous.catch(() => undefined).then(operation); bookingLocks.set(key, next); return next.finally(() => { if (bookingLocks.get(key) === next) bookingLocks.delete(key); }); }
+function bookingFingerprint({ people, date, time, name }) { return `${people}|${date}|${time}|${String(name).toLowerCase()}`; }
+function parseDateAndTime(args) { const date = normaliseDate(args.date); const parsedTime = normaliseTime(args.time); return { date, ...parsedTime }; }
+function weekdayForDate(date) { const match = String(date || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (!match) return null; const d = new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1])); if (Number.isNaN(d.getTime())) return null; return ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"][d.getDay()]; }
+function isClosedDate(date, config) { const weekday = weekdayForDate(date); if (!weekday) return false; return /^closed$/i.test(String(config?.openingHours?.[weekday] || "").trim()); }
 
 export const realtimeTools = [
-  {
-    type: "function",
-    name: "check_day_availability",
-    description: "Use when the caller asks whether they can book on a day but gives no time. If the restaurant is open that day, treat the day as bookable and ask for the time next. Only report the day unavailable when the restaurant is closed.",
-    parameters: { type: "object", properties: { date: { type: "string" } }, required: ["date"], additionalProperties: false }
-  },
-  {
-    type: "function",
-    name: "check_availability",
-    description: "Check a restaurant date and time before saying it is available. Times without AM or PM are normalised as PM unless the caller explicitly says AM/morning.",
-    parameters: {
-      type: "object",
-      properties: { date: { type: "string" }, time: { type: "string" } },
-      required: ["date", "time"], additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "create_booking",
-    description: "Create the booking only after clear agreement to one final summary containing party size, date, time and name.",
-    parameters: {
-      type: "object",
-      properties: {
-        people: { type: "integer" }, date: { type: "string" }, time: { type: "string" }, name: { type: "string" }, notes: { type: "string" }
-      },
-      required: ["people", "date", "time", "name"], additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "end_call",
-    description: "End the phone call ONLY after the caller clearly indicates they are finished, for example 'that's all', 'nothing else', 'no thanks', or 'goodbye'. Never use this merely because the conversation pauses or seems complete.",
-    parameters: { type: "object", properties: {}, additionalProperties: false }
-  }
+  { type: "function", name: "check_day_availability", description: "Use when the caller asks whether they can book on a day but gives no time.", parameters: { type: "object", properties: { date: { type: "string" } }, required: ["date"], additionalProperties: false } },
+  { type: "function", name: "check_availability", description: "Check a business date and time before saying it is available.", parameters: { type: "object", properties: { date: { type: "string" }, time: { type: "string" } }, required: ["date","time"], additionalProperties: false } },
+  { type: "function", name: "create_booking", description: "Create the booking only after clear agreement to one final summary.", parameters: { type: "object", properties: { people: { type: "integer" }, date: { type: "string" }, time: { type: "string" }, name: { type: "string" }, notes: { type: "string" } }, required: ["people","date","time","name"], additionalProperties: false } },
+  { type: "function", name: "end_call", description: "End the call only after the caller clearly indicates they are finished.", parameters: { type: "object", properties: {}, additionalProperties: false } }
 ];
 
 export async function runRealtimeTool(name, args = {}, context = {}) {
-  if (name === "check_day_availability") {
-    const date = normaliseDate(args.date);
-    if (!date) return { ok: false, reason: "invalid_date" };
-    if (isClosedDate(date)) {
-      return { ok: true, available: false, closed: true, reason: "closed", date, spokenDate: formatDateForSpeech(date) };
-    }
-    return { ok: true, available: true, closed: false, reason: null, date, spokenDate: formatDateForSpeech(date), needsTime: true };
-  }
-
-  if (name === "check_availability") {
-    const { date, time, ambiguous, candidate } = parseDateAndTime(args);
-    if (!date) return { ok: false, reason: "invalid_date", message: "The date was not clear enough to check." };
-    if (ambiguous) return { ok: false, reason: "ambiguous_time", candidate: candidate || null, message: "Ask only whether they mean AM or PM." };
-    if (!time) return { ok: false, reason: "invalid_time", message: "The time was not clear enough to check." };
-    const validation = await validateRequestedSlot(date, time);
-    if (validation.ok) return { ok: true, available: true, date, spokenDate: formatDateForSpeech(date), time };
-    return { ok: true, available: false, closed: validation.reason === "closed", date, spokenDate: formatDateForSpeech(date), time, reason: validation.reason, suggestion: validation.suggestion || null };
-  }
-
-  if (name === "create_booking") {
-    const maxPeople = businessConfig.bookingSettings?.maximumPartySize || 6;
-    const people = normalisePeople(args.people);
-    const { date, time, ambiguous, candidate } = parseDateAndTime(args);
-    const nameForBooking = normaliseName(args.name);
-    const notes = String(args.notes || "").trim().slice(0, 250);
-    if (!Number.isInteger(people) || people < 1) return { ok: false, reason: "invalid_party_size" };
-    if (people > maxPeople) return { ok: false, reason: "party_too_large", maximumPartySize: maxPeople };
-    if (!date) return { ok: false, reason: "invalid_date" };
-    if (ambiguous) return { ok: false, reason: "ambiguous_time", candidate: candidate || null };
-    if (!time) return { ok: false, reason: "invalid_time" };
-    if (!nameForBooking) return { ok: false, reason: "invalid_name" };
-    const fingerprint = bookingFingerprint({ people, date, time, name: nameForBooking });
-    if (context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint);
-    const lockKey = `${date}|${time}`;
-    return withBookingLock(lockKey, async () => {
-      if (context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint);
-      const validation = await validateRequestedSlot(date, time);
-      if (!validation.ok) return { ok: false, reason: validation.reason || "unavailable", suggestion: validation.suggestion || null };
-      const customerPhone = context.callerNumber || "";
-      const saved = await saveBookingToSheet({ people, date, time, name: nameForBooking, phone: customerPhone, notes });
-      if (!saved) return { ok: false, reason: "save_failed" };
-      await sendBookingNotification({ people, date, time, name: nameForBooking, phone: customerPhone });
-      const result = { ok: true, confirmed: true, booking: { people, date, spokenDate: formatDateForSpeech(date), time, name: nameForBooking } };
-      context.savedBookings?.set(fingerprint, result);
-      return result;
-    });
-  }
-
-  if (name === "end_call") {
-    return { ok: true, action: "end_call" };
-  }
-
-  return { ok: false, reason: "unknown_tool" };
+  const config = context.businessConfig;
+  if (name === "check_day_availability") { const date = normaliseDate(args.date); if (!date) return { ok:false, reason:"invalid_date" }; if (isClosedDate(date, config)) return { ok:true, available:false, closed:true, reason:"closed", date, spokenDate:formatDateForSpeech(date) }; return { ok:true, available:true, closed:false, reason:null, date, spokenDate:formatDateForSpeech(date), needsTime:true }; }
+  if (name === "check_availability") { const { date,time,ambiguous,candidate } = parseDateAndTime(args); if (!date) return { ok:false, reason:"invalid_date" }; if (ambiguous) return { ok:false, reason:"ambiguous_time", candidate:candidate||null }; if (!time) return { ok:false, reason:"invalid_time" }; const validation = await validateRequestedSlot(date,time,config); if (validation.ok) return { ok:true, available:true, date, spokenDate:formatDateForSpeech(date), time }; return { ok:true, available:false, closed:validation.reason==="closed", date, spokenDate:formatDateForSpeech(date), time, reason:validation.reason, suggestion:validation.suggestion||null }; }
+  if (name === "create_booking") { const maxPeople = config?.bookingSettings?.maximumPartySize || 6; const people = normalisePeople(args.people); const { date,time,ambiguous,candidate } = parseDateAndTime(args); const nameForBooking = normaliseName(args.name); const notes = String(args.notes||"").trim().slice(0,250); if (!Number.isInteger(people)||people<1) return {ok:false,reason:"invalid_party_size"}; if (people>maxPeople) return {ok:false,reason:"party_too_large",maximumPartySize:maxPeople}; if (!date) return {ok:false,reason:"invalid_date"}; if (ambiguous) return {ok:false,reason:"ambiguous_time",candidate:candidate||null}; if (!time) return {ok:false,reason:"invalid_time"}; if (!nameForBooking) return {ok:false,reason:"invalid_name"}; const fingerprint=bookingFingerprint({people,date,time,name:nameForBooking}); if(context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint); const lockKey=`${config?.businessName||"business"}|${date}|${time}`; return withBookingLock(lockKey, async()=>{ if(context.savedBookings?.has(fingerprint)) return context.savedBookings.get(fingerprint); const validation=await validateRequestedSlot(date,time,config); if(!validation.ok) return {ok:false,reason:validation.reason||"unavailable",suggestion:validation.suggestion||null}; const customerPhone=context.callerNumber||""; const saved=await saveBookingToSheet({people,date,time,name:nameForBooking,phone:customerPhone,notes}); if(!saved) return {ok:false,reason:"save_failed"}; await sendBookingNotification({people,date,time,name:nameForBooking,phone:customerPhone,businessConfig:config}); const result={ok:true,confirmed:true,booking:{people,date,spokenDate:formatDateForSpeech(date),time,name:nameForBooking}}; context.savedBookings?.set(fingerprint,result); return result; }); }
+  if (name === "end_call") return { ok:true, action:"end_call" };
+  return { ok:false, reason:"unknown_tool" };
 }
