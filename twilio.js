@@ -7,7 +7,7 @@ function escapeXml(text) {
     .replace(/'/g, "&apos;");
 }
 
-export function mediaStreamResponse(host, { callerNumber = "", callSid = "" } = {}) {
+export function mediaStreamResponse(host, { callerNumber = "", calledNumber = "", callSid = "" } = {}) {
   const cleanHost = String(host || "")
     .replace(/^https?:\/\//i, "")
     .replace(/^wss?:\/\//i, "")
@@ -27,6 +27,7 @@ export function mediaStreamResponse(host, { callerNumber = "", callSid = "" } = 
       statusCallback="${escapeXml(statusUrl)}"
       statusCallbackMethod="POST">
       <Parameter name="callerNumber" value="${escapeXml(callerNumber)}" />
+      <Parameter name="calledNumber" value="${escapeXml(calledNumber)}" />
       <Parameter name="callSid" value="${escapeXml(callSid)}" />
     </Stream>
   </Connect>
