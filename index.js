@@ -3,6 +3,7 @@ import bodyParser from "body-parser";
 import http from "http";
 
 import businessConfig from "./businessConfig.js";
+import { resolveBusinessForCall } from "./businessResolver.js";
 import { mediaStreamResponse } from "./twilio.js";
 import { attachRealtimeBridge } from "./realtime.js";
 
@@ -35,14 +36,17 @@ app.post("/stream-status", (req, res) => {
   res.sendStatus(204);
 });
 
-app.post("/voice", (req, res) => {
+app.post("/voice", async (req, res) => {
   try {
     const host = process.env.PUBLIC_HOST || req.get("host");
     const callerNumber = String(req.body.From || "").trim();
+    const calledNumber = String(req.body.To || "").trim();
     const callSid = String(req.body.CallSid || "").trim();
 
+    await resolveBusinessForCall(callSid, calledNumber);
+
     res.type("text/xml");
-    res.send(mediaStreamResponse(host, { callerNumber, callSid }));
+    res.send(mediaStreamResponse(host, { callerNumber, calledNumber, callSid }));
   } catch (error) {
     console.error("Failed to start voice stream:", error.message || error);
     res.type("text/xml");
